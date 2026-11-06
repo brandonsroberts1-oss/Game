@@ -1,0 +1,2 @@
+# Bundled Three.js shaders contain intentional whitespace inside template strings.
+Play-Frost-and-Fin.html linguist-generated=true -whitespace

@@ -1,0 +1,87 @@
+name: Launch Frost & Fin
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the game
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Check the game economy
+        run: npm test
+      - name: Build the website and ready-to-play download
+        run: npm run build
+      - name: Install the test browser
+        run: npx playwright install --with-deps chromium
+      - name: Verify the website and offline launcher
+        run: npx playwright test --config playwright.launch.config.ts
+      - name: Save the ready-to-play download
+        uses: actions/upload-artifact@v4
+        with:
+          name: Frost-and-Fin-download
+          path: Play-Frost-and-Fin.html
+          if-no-files-found: error
+      - name: Prepare the website
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  download:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Get the ready-to-play game
+        uses: actions/download-artifact@v4
+        with:
+          name: Frost-and-Fin-download
+      - name: Publish the browser download
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          release_tag="game-${GITHUB_SHA}"
+          if gh release view "$release_tag" >/dev/null 2>&1; then
+            gh release upload "$release_tag" Play-Frost-and-Fin.html --clobber
+          else
+            gh release create "$release_tag" Play-Frost-and-Fin.html \
+              --target "$GITHUB_SHA" \
+              --title "Frost & Fin — ready to play" \
+              --notes "Download Play-Frost-and-Fin.html below, then open it in your browser. No installation, commands, or server required. This file contains the complete game and works offline." \
+              --latest
+          fi
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Publish the game
+        id: deployment
+        uses: actions/deploy-pages@v4

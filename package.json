@@ -5,10 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "tsc -b && vite build",
+    "build": "npm run build:web && npm run build:download",
     "preview": "vite preview --host 0.0.0.0",
     "test": "tsx --test src/game/model.test.ts",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "build:web": "tsc -b && vite build",
+    "build:download": "vite build --mode standalone && node scripts/package-game.mjs",
+    "test:launch": "npm run build && playwright test --config playwright.launch.config.ts"
   },
   "dependencies": {
     "@fontsource/dm-sans": "^5.3.0",
@@ -27,6 +30,7 @@
     "@vitejs/plugin-react": "^4.5.1",
     "tsx": "^4.19.4",
     "typescript": "~5.8.3",
-    "vite": "^6.3.5"
+    "vite": "^6.3.5",
+    "vite-plugin-singlefile": "2.3.4"
   }
 }
