@@ -2,9 +2,15 @@
 
 A playable browser fishing tycoon inspired by the winter harbor, isometric movement, stacked cargo, and gather–sell–upgrade loop in the supplied video. The models, illustrations, and interface are original and generated locally in code.
 
-## Play without installing anything
+## Launch the game
 
-**[Download and play Frost & Fin](https://github.com/brandonsroberts1-oss/Game/releases/latest/download/Play-Frost-and-Fin.html)**
+**[▶ PLAY FROST & FIN](https://brandonsroberts1-oss.github.io/Game/)**
+
+Click the link and the game opens in your browser. No downloads, installation, or terminal commands. Bookmark it to launch the game again anytime.
+
+### Play offline
+
+**[Download the offline game](https://github.com/brandonsroberts1-oss/Game/releases/latest/download/Play-Frost-and-Fin.html)**
 
 Save **Play-Frost-and-Fin.html**, then double-click it to open the game in your browser. It contains the complete game, graphics, fonts, and sounds. You do not need Node.js, a terminal, a server, or an internet connection after downloading. If you downloaded the whole repository, just open the same file in its top folder. Keep this file in the same location to retain its browser save, or use Settings → Export save for a portable backup.
 
@@ -12,13 +18,9 @@ The download is published automatically after the **Launch Frost & Fin** build a
 
 The game runs in a modern browser with WebGL, such as Chrome or Edge. If your browser opens a preview instead of playing, save the file to your computer and open it there.
 
-### Play from a web link
+### Automatic updates
 
-The repository includes automatic GitHub Pages deployment. Once Pages is enabled, the browser launch address is:
-
-**https://brandonsroberts1-oss.github.io/Game/**
-
-For the repository owner, enable it once in **[Settings → Pages](https://github.com/brandonsroberts1-oss/Game/settings/pages)**: under **Build and deployment**, set **Source** to **GitHub Actions**. Then open **[Launch Frost & Fin](https://github.com/brandonsroberts1-oss/Game/actions/workflows/deploy-pages.yml)** and choose **Run workflow**. Every later push to `main` updates the site automatically. The web link becomes available after the deployment succeeds; the downloadable file above works independently of Pages.
+The website and downloadable game are published by **[Launch Frost & Fin](https://github.com/brandonsroberts1-oss/Game/actions/workflows/deploy-pages.yml)**. Every push to `main` builds and checks the game, updates the website, and publishes a ready-to-play download. GitHub Pages is already configured for this repository.
 
 Browser saves for the downloaded file and the website are separate. Use Export save / Import save to move progress between them.
 
