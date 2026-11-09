@@ -19,6 +19,9 @@ type Frame = {
   y: number;
   z: number;
   time: number;
+  pack: number;
+  cash: number;
+  inventory: Record<string, number>;
 };
 declare global {
   interface Window {
@@ -45,14 +48,6 @@ async function boot(page: Page) {
     .not.toBeNull();
   await expect.poll(async () => (await readSave(page)).version).toBe(2);
 }
-async function phase(page: Page, value: string) {
-  await expect
-    .poll(() => page.locator("canvas").getAttribute("data-phase"), {
-      timeout: 45_000,
-      intervals: [20, 40, 80],
-    })
-    .toBe(value);
-}
 async function sceneNumber(page: Page, key: string) {
   return Number(await page.locator("canvas").getAttribute(`data-${key}`));
 }
@@ -69,6 +64,18 @@ async function watchMotion(page: Page) {
           y: Number(data.actionY),
           z: Number(data.actionZ),
           time: performance.now(),
+          pack: parseInt(
+            document.querySelector(".pack-count")?.textContent || "",
+            10,
+          ),
+          cash: Number(
+            document
+              .querySelector(".money-value")
+              ?.textContent?.replaceAll(",", "") || "0",
+          ),
+          inventory:
+            JSON.parse(localStorage.getItem("frost-and-fin:save:v1") || "{}")
+              .inventory || {},
         });
         if (window.__frostQASamples.length > 5000)
           window.__frostQASamples.shift();
@@ -78,11 +85,36 @@ async function watchMotion(page: Page) {
     requestAnimationFrame(sample);
   });
 }
-async function frames(page: Page, phaseName: string): Promise<Frame[]> {
+async function motionSince(page: Page, since: number): Promise<Frame[]> {
   return page.evaluate(
-    (value) => window.__frostQASamples.filter((frame) => frame.phase === value),
-    phaseName,
+    (start) => window.__frostQASamples.filter((frame) => frame.time >= start),
+    since,
   );
+}
+function firstCycle(samples: Frame[], expected: string[]): Frame[] {
+  const start = samples.findIndex((frame) => frame.phase === expected[0]);
+  expect(start, `first ${expected[0]} frame`).toBeGreaterThanOrEqual(0);
+  const last = samples.findIndex(
+    (frame, index) => index >= start && frame.phase === expected.at(-1),
+  );
+  expect(last, `first ${expected.at(-1)} frame`).toBeGreaterThanOrEqual(start);
+  const terminal = samples.findIndex(
+    (frame, index) => index > last && frame.phase !== expected.at(-1),
+  );
+  const cycle = samples.slice(start, terminal < 0 ? undefined : terminal);
+  for (const name of expected)
+    expect(
+      cycle.some((frame) => frame.phase === name),
+      `observed ${name}`,
+    ).toBe(true);
+  const baseline = cycle[0].pack;
+  expect(Number.isFinite(baseline), "visible cargo baseline").toBe(true);
+  // Phase, rendered-object transform, and visible cargo count are sampled in the
+  // same animation frame. Slow screenshots/IPC cannot turn a completed cycle
+  // into a false early-payment failure or make a transient phase disappear.
+  for (const frame of cycle)
+    expect(frame.pack, `cargo during ${frame.phase}`).toBe(baseline);
+  return cycle;
 }
 function rotationTravel(samples: Frame[]) {
   const values = samples.map((frame) => frame.rotation).filter(Number.isFinite);
@@ -177,96 +209,88 @@ test("visible tree, fishing, and steak work cycles award cargo only after real m
         }
       : {}),
   });
-  const page = await context.newPage();
-  const video = page.video();
+  const page = await context.newPage(),
+    video = page.video();
   page.on("pageerror", (error) => errors.push(error.message));
   try {
     await watchMotion(page);
     await boot(page);
     const initial = await readSave(page);
     await test.step("axe swings, tree falls, logs bounce and fly into the stack", async () => {
+      const started = await page.evaluate(() => performance.now());
       await goto(page, "Pines");
-      await phase(page, "tree-swing");
-      expect((await readSave(page)).inventory.wood).toBe(
-        initial.inventory.wood,
-      );
-      await page.screenshot({ path: "/tmp/frost-tree-swing.png" });
-      await phase(page, "tree-fall");
-      expect((await readSave(page)).inventory.wood).toBe(
-        initial.inventory.wood,
-      );
-      await expect
-        .poll(async () => rotationTravel(await frames(page, "tree-fall")), {
-          timeout: 10_000,
-          intervals: [40, 80],
-        })
-        .toBeGreaterThan(0.3);
-      await page.screenshot({ path: "/tmp/frost-tree-fall.png" });
-      await phase(page, "log-pickup");
       await expect
         .poll(async () => (await readSave(page)).inventory.wood, {
-          timeout: 20_000,
+          timeout: 60_000,
         })
         .toBeGreaterThan(initial.inventory.wood);
-      expect(positionTravel(await frames(page, "log-pickup"))).toBeGreaterThan(
-        0.3,
-      );
-      await page.screenshot({ path: "/tmp/frost-log-stack.png" });
+      const cycle = firstCycle(await motionSince(page, started), [
+        "tree-swing",
+        "tree-fall",
+        "log-bounce",
+        "log-pickup",
+      ]);
+      expect(
+        rotationTravel(cycle.filter((frame) => frame.phase === "tree-fall")),
+      ).toBeGreaterThan(0.3);
+      expect(
+        positionTravel(cycle.filter((frame) => frame.phase === "log-pickup")),
+      ).toBeGreaterThan(0.3);
     });
     await test.step("rod casts, a whole tuna flies out of water, and lands in cargo", async () => {
-      const before = await readSave(page);
+      const before = await readSave(page),
+        started = await page.evaluate(() => performance.now());
       await goto(page, "Fish");
-      await phase(page, "cast");
-      expect((await readSave(page)).inventory.fish).toBe(before.inventory.fish);
-      await phase(page, "fish-flight");
-      expect((await readSave(page)).inventory.fish).toBe(before.inventory.fish);
-      await expect
-        .poll(async () => positionTravel(await frames(page, "fish-flight")), {
-          timeout: 10_000,
-          intervals: [40, 80],
-        })
-        .toBeGreaterThan(0.5);
-      await page.screenshot({ path: "/tmp/frost-tuna-flight.png" });
-      await phase(page, "fish-land");
       await expect
         .poll(async () => (await readSave(page)).inventory.fish, {
-          timeout: 20_000,
+          timeout: 60_000,
         })
         .toBeGreaterThan(before.inventory.fish);
+      const cycle = firstCycle(await motionSince(page, started), [
+        "cast",
+        "bobber-wait",
+        "fish-flight",
+        "fish-land",
+      ]);
+      expect(
+        positionTravel(cycle.filter((frame) => frame.phase === "fish-flight")),
+      ).toBeGreaterThan(0.5);
     });
     await test.step("cleaver cuts the whole tuna and steaks travel on the conveyor", async () => {
-      const before = await readSave(page);
+      const before = await readSave(page),
+        started = await page.evaluate(() => performance.now());
       await goto(page, "Cut tuna");
-      await phase(page, "cut");
-      expect((await readSave(page)).inventory.steak).toBe(
-        before.inventory.steak,
-      );
-      await expect
-        .poll(async () => rotationTravel(await frames(page, "cut")), {
-          timeout: 10_000,
-          intervals: [40, 80],
-        })
-        .toBeGreaterThan(0.1);
-      await page.screenshot({ path: "/tmp/frost-tuna-cut.png" });
-      await phase(page, "steak-conveyor");
-      expect((await readSave(page)).inventory.steak).toBe(
-        before.inventory.steak,
-      );
-      await expect
-        .poll(
-          async () => positionTravel(await frames(page, "steak-conveyor")),
-          { timeout: 10_000, intervals: [40, 80] },
-        )
-        .toBeGreaterThan(0.3);
-      await page.screenshot({ path: "/tmp/frost-steak-conveyor.png" });
-      await phase(page, "steak-pickup");
       await expect
         .poll(async () => (await readSave(page)).inventory.steak, {
-          timeout: 20_000,
+          timeout: 60_000,
         })
         .toBeGreaterThan(before.inventory.steak);
-      const after = await readSave(page);
-      expect(after.inventory.fish).toBeLessThan(before.inventory.fish);
+      const samples = await motionSince(page, started);
+      const cycle = firstCycle(samples, [
+        "process-unload",
+        "cut",
+        "steak-conveyor",
+        "steak-pickup",
+      ]);
+      expect(
+        rotationTravel(cycle.filter((frame) => frame.phase === "cut")),
+      ).toBeGreaterThan(0.1);
+      expect(
+        positionTravel(
+          cycle.filter((frame) => frame.phase === "steak-conveyor"),
+        ),
+      ).toBeGreaterThan(0.3);
+      // Compare the first persisted completed batch to its stable cutting-stage
+      // inputs. Auto-work may begin another batch; it must not change this proof.
+      const input = cycle.find((frame) => frame.phase === "cut")!.inventory;
+      const completed =
+        samples.find(
+          (frame) =>
+            frame.time > cycle.at(-1)!.time &&
+            frame.inventory.steak > input.steak,
+        )?.inventory || (await readSave(page)).inventory;
+      expect(completed.fish).toBe(input.fish - 1);
+      expect(completed.steak).toBe(input.steak + 4);
       await page.screenshot({ path: "/tmp/frost-work-cycle-result.png" });
     });
     expect(errors).toEqual([]);
@@ -493,6 +517,7 @@ test("a returning captain collects crew earnings at the market with an empty pac
   const returningCaptain = createInitialState();
   returningCaptain.upgrades.crew = 1;
   returningCaptain.workersStored = 60;
+  await watchMotion(page);
   await page.addInitScript(
     ({ key, state }) => {
       localStorage.setItem(key, JSON.stringify(state));
@@ -505,13 +530,21 @@ test("a returning captain collects crew earnings at the market with an empty pac
       (amount) => amount === 0,
     ),
   ).toBe(true);
+  const started = await page.evaluate(() => performance.now());
   await goto(page, "Market");
-  await phase(page, "sale-cash");
-  expect((await readSave(page)).coins).toBe(120);
   await expect
-    .poll(async () => (await readSave(page)).coins, { timeout: 30_000 })
+    .poll(async () => (await readSave(page)).coins, { timeout: 45_000 })
     .toBeGreaterThanOrEqual(180);
-  await expect.poll(async () => (await readSave(page)).workersStored).toBe(0);
+  const cycle = firstCycle(await motionSince(page, started), [
+    "sale-goods",
+    "sale-customer",
+    "sale-cash",
+  ]);
+  for (const frame of cycle.filter((frame) => frame.phase === "sale-cash"))
+    expect(frame.cash).toBe(120);
+  // Helpers keep earning after collection, so a new coin may legitimately be
+  // waiting already; the original sixty-coin payout must have been removed.
+  expect((await readSave(page)).workersStored).toBeLessThan(60);
   expect(
     Object.values((await readSave(page)).inventory).every(
       (amount) => amount === 0,

@@ -7,7 +7,7 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   fullyParallel: false,
   workers: 1,
-  reporter: "list",
+  reporter: process.env.CI ? [["list"], ["github"]] : "list",
   webServer: {
     command: "npm run dev -- --port 5173",
     url: "http://localhost:5173",
