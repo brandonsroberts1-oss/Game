@@ -1,209 +1,407 @@
-import type { CSSProperties } from "react";
+import {
+  Axe,
+  Backpack,
+  Fish,
+  Footprints,
+  Hammer,
+  House,
+  Network,
+  ShipWheel,
+  Snowflake,
+  Store,
+  Users,
+} from "lucide-react";
+import type { Resource, UpgradeId } from "./game/model";
+
+export function CashArt({ size = 32 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 64 52" aria-hidden="true">
+      <path
+        d="m3 16 39-7 19 7-39 8Z"
+        fill="#bcf364"
+        stroke="#28512c"
+        strokeWidth="2.5"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M3 16v23l19 9V24Z"
+        fill="#5bac39"
+        stroke="#28512c"
+        strokeWidth="2.5"
+        strokeLinejoin="round"
+      />
+      <path
+        d="m22 24 39-8v23l-39 9Z"
+        fill="#87d84b"
+        stroke="#28512c"
+        strokeWidth="2.5"
+        strokeLinejoin="round"
+      />
+      <path
+        d="m17 13 13-2 16 8v23l-13 3V21Z"
+        fill="#fff5be"
+        stroke="#658843"
+        strokeWidth="1.4"
+      />
+      <path
+        d="m10 20 6 3m-6 4 6 3m-6 4 6 3m25-11 12-3m-12 9 12-3m-12 9 12-3"
+        stroke="#dbf295"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
 
 export function ResourceArt({
   type,
-  size = 32,
+  size = 38,
 }: {
-  type: "wood" | "fish" | "salmon" | "coin" | "gem";
+  type: Resource | "coin" | "gem";
   size?: number;
 }) {
-  const common = {
+  const props = {
     width: size,
     height: size,
-    viewBox: "0 0 48 48",
+    viewBox: "0 0 64 64",
     "aria-hidden": true as const,
   };
-  if (type === "wood")
+  if (type === "wood" || type === "plank")
     return (
-      <svg {...common}>
-        <path d="m8 18 21-9 12 7v18l-23 8L7 34Z" fill="#9b633b" />
-        <path d="m8 18 11 7 22-9-12-7Z" fill="#c38a4d" />
-        <path d="M19 25v17l22-8V16Z" fill="#a77342" />
-        <ellipse
-          cx="13"
-          cy="29"
-          rx="8"
-          ry="11"
-          fill="#e5b77a"
-          transform="rotate(-18 13 29)"
-        />
-        <ellipse
-          cx="13"
-          cy="29"
-          rx="4.5"
-          ry="7"
-          fill="none"
-          stroke="#ba8a53"
-          strokeWidth="1.7"
-        />
+      <svg {...props}>
+        {type === "plank" ? (
+          <>
+            <path
+              d="m5 22 37-12 17 7-37 13Z"
+              fill="#e8b77b"
+              stroke="#6d442b"
+              strokeWidth="2"
+            />
+            <path
+              d="M5 22v10l17 8V30l37-13v10L22 40 5 32"
+              fill="#a87243"
+              stroke="#6d442b"
+              strokeWidth="2"
+            />
+            <path
+              d="m7 37 37-12 15 8-37 13Z"
+              fill="#f2c997"
+              stroke="#6d442b"
+              strokeWidth="2"
+            />
+            <path
+              d="M7 37v9l15 8V46l37-13v9L22 54 7 46"
+              fill="#be8b56"
+              stroke="#6d442b"
+              strokeWidth="2"
+            />
+            <path
+              d="m27 24 23-8m-23 25 22-7"
+              stroke="#b37a46"
+              strokeWidth="2"
+            />
+          </>
+        ) : (
+          <>
+            <path
+              d="m12 21 29-10 16 10v24L28 56 11 46Z"
+              fill="#aa6c35"
+              stroke="#68452d"
+              strokeWidth="2.5"
+            />
+            <path
+              d="m12 21 16 11 29-11-16-10Z"
+              fill="#d69650"
+              stroke="#68452d"
+              strokeWidth="2"
+            />
+            <path
+              d="M28 32v24l29-11V21Z"
+              fill="#a86d35"
+              stroke="#68452d"
+              strokeWidth="2"
+            />
+            <ellipse
+              cx="19"
+              cy="38"
+              rx="12"
+              ry="16"
+              fill="#f4cb8b"
+              stroke="#865732"
+              strokeWidth="2.5"
+              transform="rotate(-19 19 38)"
+            />
+            <ellipse
+              cx="19"
+              cy="38"
+              rx="6.5"
+              ry="10"
+              fill="none"
+              stroke="#bd894a"
+              strokeWidth="2"
+              transform="rotate(-19 19 38)"
+            />
+            <path
+              d="m36 32 15-6m-15 14 15-6m-15 14 15-6"
+              stroke="#794923"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+          </>
+        )}
+      </svg>
+    );
+  if (type === "steak" || type === "smoked")
+    return (
+      <svg {...props}>
+        <defs>
+          <linearGradient id={`steak-${type}`} x1="0" y1="0" x2="1" y2="1">
+            <stop stopColor={type === "steak" ? "#ff8c83" : "#efbb6d"} />
+            <stop
+              offset="1"
+              stopColor={type === "steak" ? "#d63e52" : "#a75532"}
+            />
+          </linearGradient>
+        </defs>
         <path
-          d="m25 24 11-5m-12 12 13-6m-12 10 11-4"
-          stroke="#865531"
-          strokeWidth="1.5"
-          strokeLinecap="round"
+          d="M10 28v13c0 14 43 16 45 0V28Z"
+          fill={type === "steak" ? "#b9364d" : "#8a492d"}
+          stroke="#75442f"
+          strokeWidth="2"
         />
+        <ellipse
+          cx="32"
+          cy="29"
+          rx="23"
+          ry="19"
+          fill="#f7e5b9"
+          stroke="#714c32"
+          strokeWidth="2.5"
+        />
+        <ellipse cx="32" cy="29" rx="18" ry="14" fill={`url(#steak-${type})`} />
+        <path
+          d="M32 16v27m-16-17 29 9m-26 4 25-20"
+          stroke={type === "steak" ? "#ffb8a0" : "#e9b37a"}
+          strokeWidth="1.5"
+        />
+        <ellipse cx="32" cy="29" rx="6.5" ry="5" fill="#fff5dc" />
+        <ellipse cx="32" cy="29" rx="2.8" ry="2" fill="#e5c7ac" />
+        {type === "smoked" && (
+          <path
+            d="M21 12c-6-6 4-7 0-12m11 10c-5-5 4-7 1-11m11 13c-5-5 4-6 1-10"
+            stroke="#b5c6c5"
+            strokeWidth="3"
+            fill="none"
+            strokeLinecap="round"
+          />
+        )}
       </svg>
     );
   if (type === "fish" || type === "salmon")
     return (
-      <svg {...common}>
-        <g transform="rotate(-22 24 24)">
+      <svg {...props}>
+        <g transform="rotate(-24 32 32)">
           <path
-            d="m10 24-9-9v18Z"
-            fill={type === "fish" ? "#648d9e" : "#be8979"}
+            d="m15 32-12-12v25Z"
+            fill={type === "fish" ? "#3773a3" : "#c76a59"}
+            stroke="#28445b"
+            strokeWidth="2.3"
+            strokeLinejoin="round"
           />
           <path
-            d="M9 24C17 7 35 7 46 24 35 41 17 41 9 24Z"
-            fill={type === "fish" ? "#8eb7c7" : "#e5aa93"}
+            d="M12 32C23 8 47 9 61 32 46 55 23 56 12 32Z"
+            fill={type === "fish" ? "#85bfe1" : "#e9a18d"}
+            stroke="#28445b"
+            strokeWidth="2.3"
           />
           <path
-            d="M10 24C20 10 36 10 46 24Z"
-            fill={type === "fish" ? "#4e7b91" : "#bf877d"}
+            d="M13 32C26 11 47 13 60 32Z"
+            fill={type === "fish" ? "#2d65a4" : "#ba6f77"}
           />
+          <path d="M19 36c14 11 28 7 36-1-14 6-24 7-36 1Z" fill="#edf2dd" />
           <path
-            d="M14 27c10 9 22 7 28-1-13 5-19 5-28 1Z"
-            fill={type === "fish" ? "#cfe2de" : "#f5d6b7"}
-          />
-          <path
-            d="m23 12 5-7 5 9m-13 19 7 7 3-6"
-            fill={type === "fish" ? "#5d8e9e" : "#bd8578"}
-          />
-          <path
-            d="M35 18c-3 4-3 8 0 12"
-            fill="none"
-            stroke={type === "fish" ? "#5d8a99" : "#ca9885"}
+            d="m31 16 8-12 8 15m-20 25 10 13 8-12"
+            fill={type === "fish" ? "#386c9a" : "#b46a6b"}
+            stroke="#28445b"
             strokeWidth="1.5"
           />
-          <circle cx="39" cy="22" r="2.3" fill="#fffdf3" />
-          <circle cx="39.6" cy="22" r="1.2" fill="#294654" />
           <path
-            d="m17 20 3-2m3 4 3-2m-6 6 3-2"
-            stroke={type === "fish" ? "#aacbd0" : "#f0c3ab"}
-            strokeWidth="1.3"
-            strokeLinecap="round"
+            d="M47 23c-5 5-5 13 0 18"
+            stroke="#407f9f"
+            strokeWidth="2"
+            fill="none"
           />
+          <circle cx="52" cy="29" r="4.3" fill="#fff9e7" />
+          <circle cx="53" cy="29" r="2.2" fill="#1d304a" />
+          <circle cx="53.5" cy="28" r=".8" fill="white" />
         </g>
       </svg>
     );
   if (type === "gem")
     return (
-      <svg {...common}>
-        <path d="m13 9 23 2 9 14-21 20L3 24Z" fill="#7badb3" />
-        <path d="M13 9 3 24l18-2Z" fill="#a2d0cc" />
-        <path d="m13 9 8 13 15-11Z" fill="#ddf0df" />
-        <path d="m21 22 3 23 21-20Z" fill="#6c99a0" />
-        <path d="m21 22 15-11 9 14Z" fill="#b7d9d0" />
+      <svg {...props}>
+        <path
+          d="m16 13 30 2 13 19-27 26L4 33Z"
+          fill="#77c9dc"
+          stroke="#305d84"
+          strokeWidth="3"
+        />
+        <path d="m16 13 12 20 18-18-14 45-4-27L4 33" fill="#c1f0ef" />
       </svg>
     );
   return (
-    <svg {...common}>
-      <ellipse cx="25" cy="25" rx="18" ry="20" fill="#bc842d" />
-      <ellipse cx="22" cy="23" rx="18" ry="20" fill="#e8b948" />
+    <svg {...props}>
       <ellipse
-        cx="22"
-        cy="23"
-        rx="13"
-        ry="15"
-        fill="none"
-        stroke="#fbe198"
+        cx="35"
+        cy="34"
+        rx="25"
+        ry="28"
+        fill="#b17c1f"
+        stroke="#77521f"
         strokeWidth="2"
       />
-      <path d="m23 12 1 8 7 3-7 3-2 8-2-8-6-3 7-3Z" fill="#fff0bc" />
-    </svg>
-  );
-}
-
-export function BackpackArt({ className = "" }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 220 160"
-      fill="none"
-      aria-hidden="true"
-    >
-      <ellipse cx="112" cy="137" rx="64" ry="10" fill="#bed1ad" opacity=".36" />
-      <path d="M169 131c-9-19-8-39 4-48 10 19 6 35-4 48Z" fill="#9cb783" />
-      <path d="M173 113c9-16 21-18 27-13-1 13-13 17-27 13Z" fill="#bed0a1" />
-      <path d="M48 136c2-20-6-28-18-27 1 13 7 24 18 27Z" fill="#9db681" />
-      <path
-        d="M83 55V38c0-18 43-18 43 0v17"
-        stroke="#b48349"
-        strokeWidth="10"
+      <ellipse
+        cx="30"
+        cy="30"
+        rx="25"
+        ry="28"
+        fill="#f3c74d"
+        stroke="#77521f"
+        strokeWidth="2.5"
       />
-      <path
-        d="M68 64c0-14 11-24 25-24h35c16 0 28 12 28 29v58c0 10-8 17-18 17H83c-10 0-17-7-17-17Z"
-        fill="#3d6c53"
-      />
-      <path d="M70 59c-11 1-17 17-17 35v31c0 7 5 10 11 10h8Z" fill="#628466" />
-      <path d="M147 69c15 2 18 16 18 29v25c0 9-5 13-12 13h-9Z" fill="#294e3d" />
-      <path
-        d="M67 68c0-16 12-26 27-26h31c17 0 30 11 30 26v8c0 15-12 23-44 23-31 0-44-9-44-23Z"
-        fill="#789667"
-      />
-      <path d="M75 67c16-6 48-6 69 0" stroke="#96ae80" strokeWidth="2" />
-      <path d="M88 89v24m45-24v24" stroke="#cdab70" strokeWidth="8" />
-      <rect x="80" y="108" width="64" height="29" rx="8" fill="#54774f" />
-      <rect x="100" y="89" width="24" height="19" rx="4" fill="#d6ae63" />
-      <rect x="106" y="94" width="12" height="9" rx="2" fill="#709063" />
-      <path d="m71 47 4-13-7-8-12 3-1 12Z" fill="#b9cfa1" />
-      <path d="m60 37 9 7" stroke="#7a9b69" strokeWidth="2" />
-      <path
-        d="m158 47 5-8m6 17 8-1m-18-17-2-5"
-        stroke="#d6bd73"
+      <ellipse
+        cx="30"
+        cy="30"
+        rx="18"
+        ry="21"
+        fill="none"
+        stroke="#ffe99b"
         strokeWidth="3"
-        strokeLinecap="round"
       />
+      <path d="m30 14 4 10 10 4-10 5-4 13-3-13-10-5 10-4Z" fill="#fff0a9" />
     </svg>
   );
 }
 
-export function IslandArt({
-  color = "#8fae76",
-  style,
+export function UpgradeArt({
+  type,
+  level = 0,
 }: {
-  color?: string;
-  style?: CSSProperties;
+  type: UpgradeId;
+  level?: number;
 }) {
+  if (type === "cutter")
+    return (
+      <svg width="70" height="70" viewBox="0 0 80 80" aria-hidden="true">
+        <path
+          d="m7 53 34-11 32 9-35 14Z"
+          fill="#79a0a4"
+          stroke="#3b4c58"
+          strokeWidth="2.5"
+        />
+        <path
+          d="M8 53v12l30 10V65l35-14v12L38 75"
+          fill="#476e7a"
+          stroke="#3b4c58"
+          strokeWidth="2.5"
+        />
+        <path
+          d="M17 51V21h43v29"
+          stroke="#6f5727"
+          strokeWidth="11"
+          fill="none"
+        />
+        <path
+          d="M17 51V21h43v29"
+          stroke="#efc75a"
+          strokeWidth="7"
+          fill="none"
+        />
+        <circle
+          cx="40"
+          cy="38"
+          r="14"
+          fill="#dbe6e4"
+          stroke="#5f7484"
+          strokeWidth="3"
+          strokeDasharray="5 2"
+        />
+        <circle cx="40" cy="38" r="4" fill="#6b8c9b" />
+        <path
+          d="m31 57 8-3 9 3-9 4Z"
+          fill="#e88b86"
+          stroke="#fbe0b3"
+          strokeWidth="3"
+        />
+        <rect
+          x="54"
+          y="44"
+          width="13"
+          height="14"
+          rx="3"
+          fill="#d58136"
+          stroke="#6f5727"
+          strokeWidth="2"
+        />
+      </svg>
+    );
+  if (type === "sawmill")
+    return (
+      <svg width="70" height="70" viewBox="0 0 80 80" aria-hidden="true">
+        <path d="M12 53v18m51-19v17" stroke="#72502f" strokeWidth="8" />
+        <path
+          d="m7 48 33-9 33 11-33 12Z"
+          fill="#ddb072"
+          stroke="#714b2a"
+          strokeWidth="3"
+        />
+        <circle
+          cx="45"
+          cy="36"
+          r="22"
+          fill="#d2dfe5"
+          stroke="#536778"
+          strokeWidth="3"
+          strokeDasharray="5 3"
+        />
+        <circle cx="45" cy="36" r="5" fill="#637b89" />
+        <path
+          d="m9 43 26-7 10 9-27 7Z"
+          fill="#ac733c"
+          stroke="#704a2b"
+          strokeWidth="2"
+        />
+        <ellipse
+          cx="14"
+          cy="47"
+          rx="7"
+          ry="10"
+          fill="#f1ca8b"
+          stroke="#815931"
+          strokeWidth="2"
+          transform="rotate(-21 14 47)"
+        />
+      </svg>
+    );
+  const Icon =
+    (
+      {
+        axe: Axe,
+        rod: Fish,
+        backpack: Backpack,
+        market: Store,
+        dock: ShipWheel,
+        crew: Users,
+        smokehouse: House,
+        freezer: Snowflake,
+        boots: Footprints,
+        nets: Network,
+      } as const
+    )[type as Exclude<UpgradeId, "cutter" | "sawmill">] || Hammer;
   return (
-    <svg viewBox="0 0 240 140" style={style} aria-hidden="true">
-      <ellipse cx="120" cy="108" rx="102" ry="20" fill="#d2e5df" />
-      <path
-        d="M30 85c-5-21 21-38 57-44 30-28 95-11 112 13 34 18 14 48-28 54-45 18-131 1-141-23Z"
-        fill="#c7b78a"
-      />
-      <path
-        d="M31 77c-5-21 21-38 57-44 30-28 95-11 112 13 34 18 14 48-28 54-45 18-131 1-141-23Z"
-        fill="#e9d6a7"
-      />
-      <path
-        d="M40 68c1-18 33-27 50-28 34-29 89-4 100 10 38 24-8 43-40 44-51 4-104-6-110-26Z"
-        fill="#e9f1f2"
-      />
-      <path
-        d="m68 64 68-16 35 27"
-        stroke="#82b7c8"
-        strokeWidth="12"
-        strokeLinecap="round"
-      />
-      <path
-        d="M63 69V38m0 18L47 58l16-31 16 31Z"
-        fill="#b8cfd8"
-        stroke="#698e9b"
-        strokeWidth="4"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M166 61V28m0 19-16 2 16-32 16 32Z"
-        fill="#dcebf0"
-        stroke="#769baa"
-        strokeWidth="4"
-        strokeLinejoin="round"
-      />
-      <path d="M99 66V48l23-10 20 11v20Z" fill={color} />
-      <path d="m94 50 26-20 27 20Z" fill="#f5f6ef" />
-      <path d="M116 69V54h10v15" fill="#4e7b8d" />
-      <ellipse cx="81" cy="79" rx="8" ry="5" fill="#8ea8b1" />
-      <ellipse cx="173" cy="79" rx="11" ry="7" fill="#ccdce1" />
-    </svg>
+    <span className={`illustrated-upgrade icon-${type} tier-${level}`}>
+      <Icon size={43} strokeWidth={2.6} />
+      {level > 0 && <i>★</i>}
+    </span>
   );
 }

@@ -4,13 +4,13 @@ import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: "./tests",
   testMatch: "launch.spec.ts",
-  timeout: 60_000,
+  timeout: 180_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
   workers: 1,
   reporter: "list",
   use: {
-    viewport: { width: 1440, height: 1050 },
+    viewport: { width: 390, height: 844 },
     launchOptions: {
       executablePath:
         process.env.PLAYWRIGHT_CHROMIUM_PATH ||

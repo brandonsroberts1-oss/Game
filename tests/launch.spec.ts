@@ -4,7 +4,6 @@ import { copyFile, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { OrthographicCamera, Vector3 } from "three";
 
 const repository = fileURLToPath(new URL("../", import.meta.url));
 const distRoot = resolve(repository, "dist");
@@ -71,15 +70,41 @@ test.afterAll(async () => {
 });
 
 async function assertWorldReady(page: Page) {
-  await expect(
-    page.getByRole("heading", { name: "Frosthaven Harbor", exact: true }),
-  ).toBeVisible();
-  await expect(page.locator(".world-loading")).toHaveCount(0, {
+  await expect(page.locator(".game-screen")).toBeVisible();
+  await expect(page.locator(".world-layer canvas")).toBeVisible({
     timeout: 30_000,
   });
-  await expect(page.locator("canvas")).toBeVisible();
-  // Waiting on the actual bundled fonts catches font files accidentally left outside the HTML.
+  await expect
+    .poll(() => page.locator("canvas").getAttribute("data-phase"))
+    .not.toBeNull();
+  await expect.poll(async () => (await readSave(page)).version).toBe(2);
   await page.evaluate(() => document.fonts.ready);
+}
+async function readSave(
+  page: Page,
+): Promise<{
+  version: number;
+  coins: number;
+  inventory: Record<string, number>;
+  upgrades: Record<string, number>;
+}> {
+  return page.evaluate(
+    (key) => JSON.parse(localStorage.getItem(key) || "{}"),
+    saveKey,
+  );
+}
+async function travel(
+  page: Page,
+  name: "Pines" | "Fish" | "Cut tuna" | "Market",
+) {
+  await page.getByRole("button", { name, exact: true }).first().click();
+}
+async function buyAxe(page: Page) {
+  await page.getByRole("button", { name: "Build", exact: true }).click();
+  await page.getByRole("tab", { name: "Gear", exact: true }).click();
+  await page.locator('.upgrade-buy[data-upgrade="axe"]').click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect.poll(async () => (await readSave(page)).upgrades.axe).toBe(1);
 }
 
 function observeLaunch(page: Page) {
@@ -99,69 +124,25 @@ function observeLaunch(page: Page) {
   return { errors, failures, badResponses, requests };
 }
 
-async function buyBackpack(page: Page) {
-  await page
-    .getByRole("button", { name: "Build & upgrade", exact: false })
-    .click();
-  const option = page
-    .locator(".upgrade-option")
-    .filter({
-      has: page.getByRole("heading", { name: "Bigger backpack", exact: true }),
-    });
-  await option.getByRole("button", { name: "Upgrade 120" }).click();
-  await expect(option).toContainText("LEVEL 1 / 25");
-  await expect(page.locator(".pack-label")).toContainText("0 / 60");
-  await page.getByRole("button", { name: "Close menu" }).click();
-}
-
-async function tapFishingSpot(page: Page) {
-  const canvas = page.locator("canvas");
-  const rect = await canvas.boundingBox();
-  if (!rect) throw new Error("World canvas is missing");
-  const aspect = rect.width / rect.height,
-    half = Math.max(10, 14 / aspect);
-  const camera = new OrthographicCamera(
-    -half * aspect,
-    half * aspect,
-    half,
-    -half,
-    0.1,
-    180,
-  );
-  camera.position.set(24, 28, 32);
-  camera.lookAt(0, 0, 1.3);
-  camera.zoom = 1.15;
-  camera.updateProjectionMatrix();
-  camera.updateMatrixWorld();
-  const point = new Vector3(-3.45, 0.78, 2.7).project(camera);
-  await canvas.click({
-    position: {
-      x: ((point.x + 1) * rect.width) / 2,
-      y: ((1 - point.y) * rect.height) / 2,
-    },
-  });
-}
-
-test("production build runs under /Game/ with all assets and a complete trade and upgrade", async ({
+test("production build under /Game/ gathers, physically sells, and builds with all assets present", async ({
   page,
 }) => {
+  test.setTimeout(150_000);
   const observed = observeLaunch(page);
   await page.goto(`${serverOrigin}/Game/`);
   await assertWorldReady(page);
-  await page
-    .getByRole("button", { name: "Sell your catch", exact: true })
-    .click();
-  await expect(page.locator(".market-total")).toContainText("126");
-  await page
-    .getByRole("button", { name: "Sell everything in your pack" })
-    .click();
-  await expect(
-    page.getByRole("button", { name: "366 coins. Open market" }),
-  ).toBeVisible();
-  await buyBackpack(page);
-  await expect(
-    page.getByRole("button", { name: "246 coins. Open market" }),
-  ).toBeVisible();
+  const initial = await readSave(page);
+  await travel(page, "Pines");
+  await expect
+    .poll(async () => (await readSave(page)).inventory.wood, {
+      timeout: 60_000,
+    })
+    .toBeGreaterThan(initial.inventory.wood);
+  await travel(page, "Market");
+  await expect
+    .poll(async () => (await readSave(page)).coins, { timeout: 60_000 })
+    .toBeGreaterThan(initial.coins);
+  await buyAxe(page);
   expect(
     observed.requests.filter(
       (url) =>
@@ -180,54 +161,29 @@ async function exerciseOfflineGame(
   entry: string,
 ) {
   await assertWorldReady(page);
-  await tapFishingSpot(page);
+  const initial = await readSave(page);
+  await travel(page, "Fish");
   await expect
-    .poll(
-      async () =>
-        Number(
-          await page
-            .locator('.resource-summary button[title="Fresh tuna"] strong')
-            .innerText(),
-        ),
-      { timeout: 30_000 },
-    )
-    .toBeGreaterThan(4);
-  await page
-    .getByRole("button", { name: "Sell your catch", exact: true })
-    .click();
-  const value = Number(
-    (await page.locator(".market-total strong").innerText()).replaceAll(
-      ",",
-      "",
-    ),
-  );
-  expect(value).toBeGreaterThan(126);
-  await page
-    .getByRole("button", { name: "Sell everything in your pack" })
-    .click();
-  await expect(
-    page.getByRole("button", { name: `${240 + value} coins. Open market` }),
-  ).toBeVisible();
-  await buyBackpack(page);
-  const expectedCoins = 240 + value - 120;
-  await expect(
-    page.getByRole("button", { name: `${expectedCoins} coins. Open market` }),
-  ).toBeVisible();
+    .poll(async () => (await readSave(page)).inventory.fish, {
+      timeout: 60_000,
+    })
+    .toBeGreaterThan(initial.inventory.fish);
+  await travel(page, "Cut tuna");
   await expect
-    .poll(() =>
-      page.evaluate(
-        (key) =>
-          JSON.parse(localStorage.getItem(key) || "{}").upgrades?.backpack,
-        saveKey,
-      ),
-    )
-    .toBe(1);
+    .poll(async () => (await readSave(page)).inventory.steak, {
+      timeout: 60_000,
+    })
+    .toBeGreaterThan(initial.inventory.steak);
+  await travel(page, "Market");
+  await expect
+    .poll(async () => (await readSave(page)).coins, { timeout: 60_000 })
+    .toBeGreaterThan(initial.coins);
+  await buyAxe(page);
+  const saved = await readSave(page);
   await page.reload();
   await assertWorldReady(page);
-  await expect(
-    page.getByRole("button", { name: `${expectedCoins} coins. Open market` }),
-  ).toBeVisible();
-  await expect(page.locator(".pack-label")).toContainText("0 / 60");
+  expect((await readSave(page)).coins).toBe(saved.coins);
+  expect((await readSave(page)).upgrades.axe).toBe(1);
   expect(
     observed.requests.filter((url) => /^https?:/.test(url) && url !== entry),
   ).toEqual([]);
@@ -248,7 +204,7 @@ test("standalone HTML opens directly from an isolated file and plays offline", a
   await copyFile(join(repository, "Play-Frost-and-Fin.html"), standalone);
   const context = await browser.newContext({
     offline: true,
-    viewport: { width: 1440, height: 1050 },
+    viewport: { width: 390, height: 844 },
   });
   try {
     const page = await context.newPage();
@@ -278,7 +234,7 @@ test("standalone artifact plays and saves offline using one intercepted document
 }) => {
   const context = await browser.newContext({
     offline: true,
-    viewport: { width: 1440, height: 1050 },
+    viewport: { width: 390, height: 844 },
   });
   try {
     const entry = "https://standalone.invalid/Play-Frost-and-Fin.html";

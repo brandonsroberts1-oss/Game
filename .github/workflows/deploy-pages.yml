@@ -31,6 +31,8 @@ jobs:
         run: npm run build
       - name: Install the test browser
         run: npx playwright install --with-deps chromium
+      - name: Verify animated work, upgrades, and phone controls
+        run: npm run test:browser
       - name: Verify the website and offline launcher
         run: npx playwright test --config playwright.launch.config.ts
       - name: Save the ready-to-play download

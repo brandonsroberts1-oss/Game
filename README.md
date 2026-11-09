@@ -1,78 +1,86 @@
 # Frost & Fin
 
-A playable browser fishing tycoon inspired by the winter harbor, isometric movement, stacked cargo, and gather–sell–upgrade loop in the supplied video. The models, illustrations, and interface are original and generated locally in code.
+## [▶ PLAY THE GAME](https://brandonsroberts1-oss.github.io/Game/?v=2)
 
-## Launch the game
+Open the link on your phone or computer. No installation or terminal commands.
 
-**[▶ PLAY FROST & FIN](https://brandonsroberts1-oss.github.io/Game/)**
+A phone-first 3D fishing and timber tycoon. The starting dock is the game: chop trees, land whole tuna, cut steaks, serve customers, and build the machinery that makes each trip more valuable.
 
-Click the link and the game opens in your browser. No downloads, installation, or terminal commands. Bookmark it to launch the game again anytime.
+## What happens on the dock
 
-### Play offline
+- **Timber:** the captain swings an axe, wood chips fly, the pine falls, logs bounce on the ground, and the logs are collected into a stack on the captain’s back. Stumps remain while trees regrow.
+- **Fishing:** the captain casts a line, the bobber dips, a tuna jumps out of the water, and the catch lands in the cargo stack.
+- **Cutting:** a whole tuna goes onto the cutting table. A cleaver cuts it into round tuna steaks. The steaks travel off the bench and are collected. Upgrade the table into a yellow powered cutter with saw blades, a piston, and a conveyor.
+- **Trading:** carried goods move onto the counter, a customer is served, green cash stacks appear, and payment is collected.
+- **Building:** twelve upgrade tracks with five stages each change equipment, machinery, buildings, or dock geometry. Construction is shown on the dock; buying closes the menu so you can see it happen.
 
-**[Download the offline game](https://github.com/brandonsroberts1-oss/Game/releases/latest/download/Play-Frost-and-Fin.html)**
+Resources and cash are awarded at the end of the corresponding work animation. Processing consumes actual inputs and checks output capacity; it cannot generate steaks without a tuna.
 
-Save **Play-Frost-and-Fin.html**, then double-click it to open the game in your browser. It contains the complete game, graphics, fonts, and sounds. You do not need Node.js, a terminal, a server, or an internet connection after downloading. If you downloaded the whole repository, just open the same file in its top folder. Keep this file in the same location to retain its browser save, or use Settings → Export save for a portable backup.
+## Phone controls
 
-The download is published automatically after the **Launch Frost & Fin** build and launch checks succeed. Each release points to its exact source commit. Publishing the download works independently of GitHub Pages settings.
+Drag the joystick to walk. Tap a tree, fish, or work station to walk over and work. The **Pines**, **Fish**, **Cut tuna**, and **Market** buttons also direct the captain to that spot on the same dock. Tap **WORK** to interact nearby.
 
-The game runs in a modern browser with WebGL, such as Chrome or Edge. If your browser opens a preview instead of playing, save the file to your computer and open it there.
+Use **BUILD** for dock upgrades, **CARGO** for carried goods and recipes, and **GOALS** for job rewards. The starting area has no region portals. The camera follows the captain and briefly focuses on newly built equipment.
 
-### Automatic updates
+On a computer, click the world and use WASD or the arrow keys to walk, and E or Space to work.
 
-The website and downloadable game are published by **[Launch Frost & Fin](https://github.com/brandonsroberts1-oss/Game/actions/workflows/deploy-pages.yml)**. Every push to `main` builds and checks the game, updates the website, and publishes a ready-to-play download. GitHub Pages is already configured for this repository.
+## Starting-area upgrades
 
-Browser saves for the downloaded file and the website are separate. Use Export save / Import save to move progress between them.
+| Yard                    | Gear              | Crew           |
+| ----------------------- | ----------------- | -------------- |
+| Powered fish cutter     | Forester’s axe    | Five dockhands |
+| Sawmill                 | Fishing rod       |                |
+| Market counter and roof | Larger cargo pack |                |
+| Trading pier            | Winter boots      |                |
+| Smokehouse              | River nets        |                |
+| Cold storage            |                   |                |
+
+Production chains:
+
+- 1 whole tuna → 4 steaks at the manual cutting bench; upgraded cutters work faster and improve yields.
+- 3 logs → 2 planks after building a sawmill.
+- 2 steaks + 1 log → 2 smoked fish after building a smokehouse.
+
+There are sixteen lifetime jobs, daily haul rewards, and crew earnings capped at eight hours offline. There are no real-money purchases.
+
+## Saves and offline play
+
+The game automatically saves in this browser. **Game settings → Export save** creates a backup; Import save restores it. Older version 1 saves migrate to version 2 while retaining cash and raw goods. Oversized old cargo can be sold before gathering more.
+
+**[Download the offline game](https://github.com/brandonsroberts1-oss/Game/releases/latest/download/Play-Frost-and-Fin.html)**, then open the downloaded HTML file in your browser. Everything needed to play is embedded in that file. A copy is also included at the top of this repository.
+
+The website and downloaded file have separate browser storage. Export/import moves progress between them. Clearing browser data or moving the offline file may affect its local save. Daily goals reset at 00:00 UTC. Offline earnings use the device clock; there is no account or server synchronization.
 
 ## Development
 
-Requires Node.js 22 or newer and npm.
+Node.js 22 or newer and npm are required for development only.
 
 ```sh
 npm ci
 npm run dev
 ```
 
-Vite serves the game on port 5173. `npm run build` creates both the `dist/` website and the ready-to-play `Play-Frost-and-Fin.html` in the repository root. `npm run preview` serves the website. No API keys, accounts, remote assets, or backend services are required. The HTML download is generated from the same source and should be committed whenever the game is updated; do not edit the generated file by hand.
+If this environment's default npm cache is not writable, use `npm ci --cache /tmp/frost-fin-npm-cache`.
 
-If the environment's default npm cache is not writable, add `--cache /tmp/frost-fin-npm-cache` to `npm ci`.
-
-## Play
-
-- Click or tap ground to walk. Click a swimming fish, fishing ring, or pine to gather. Your captain walks over, collects resources, and stacks cargo on their back. Depleted spots replenish after a short rest.
-- Click the world to focus it, then use WASD or arrow keys to move and E or Space to interact.
-- Visit the fish counter or choose **Sell your catch**. Tuna, salmon, and timber have different values.
-- Improve the fishing rod, backpack, market, smokehouse, and dock crew. Tool, sale-price, and storage upgrades change the economy; building upgrades also change the harbor's scenery.
-- Earn XP to unlock five further coastal regions. Each unlock adds gathering spots or harbor scenery and improves yields for its resource. The regions currently expand the shared harbor scene, rather than loading separate large maps.
-- Claim twelve journal milestones and daily goals. Crew earnings accumulate while you are away, capped at eight hours, and can be collected at the market.
-
-The initial pack includes a few supplies so you can try trading immediately. Pearls are milestone collectibles; there are no purchases or real-money transactions.
-
-## Saves
-
-Progress automatically saves in this browser's local storage under `frost-and-fin:save:v1`. Settings provides JSON export/import and a confirmed reset. Browser clearing, private browsing, or switching devices may lose local progress, so export a backup when needed. There is no cloud synchronization or multiplayer.
-
-Daily goals reset at 00:00 UTC. Offline earnings use the device clock; this local single-player game is not designed to prevent save editing or clock manipulation.
-
-## Validation
+`npm run build` creates the `dist/` website and refreshes the self-contained `Play-Frost-and-Fin.html`. Commit the refreshed HTML whenever the game changes. Each push to `main` runs the build and launch checks, publishes a versioned downloadable game, and updates GitHub Pages.
 
 ```sh
 npm test
 npm run test:browser
 npm run test:launch
-npm run build
 ```
 
-The model tests cover trading, storage limits, progression, duplicate claims, save validation, daily rollover, and offline production. Playwright exercises actual canvas harvesting, desktop and mobile menus, purchases, persistence, and save backups. The launch checks exercise the production website under `/Game/` and the standalone HTML with the browser offline. The browser suite starts Vite if needed. This environment uses `/usr/bin/chromium`; on another machine set `PLAYWRIGHT_CHROMIUM_PATH` to a compatible Chromium executable.
+The model tests cover processing, capacity, upgrades, payments, migration, quests, daily resets, and offline earnings. Browser checks exercise the real animated work cycle, deferred inventory awards, actual rendered-object movement, starter construction, joystick/camera movement, phone layouts, and save backups. Launch checks cover production hosting under `/Game/` and offline execution of the exact standalone artifact without asset requests.
 
-The managed cloud browser blocks `file://` navigation through an administrator policy. The direct file-opening check reports that policy restriction as a skip. A separate test serves only the exact HTML bytes to an isolated browser document with networking disabled and rejects all external asset requests; it checks offline fishing, trading, upgrades, and save persistence. The direct file-opening test also runs on browsers where local files are permitted.
+The managed cloud browser blocks direct `file://` navigation by administrator policy. That check reports an explicit skip here. A separate offline test supplies only the HTML document to an isolated browser and rejects all other requests. Direct file opening is also tested by GitHub Actions where it is permitted.
 
-## Project
+The local tests use `/usr/bin/chromium`. Set `PLAYWRIGHT_CHROMIUM_PATH` for another installed browser. CI uses Playwright’s installed Chromium. `FROST_RECORD_VIDEO=1` enables a phone gameplay recording when Playwright’s FFmpeg binary is available.
 
-- `src/game/world.ts` — procedural Three.js scenery, characters, fish, and buildings
-- `src/game/IslandScene.tsx` — rendering, animation, picking, navigation, and interaction
-- `src/game/model.ts` — persistent state, economy, quests, and progression
-- `src/App.tsx` — game HUD, themed menus, and save integration
-- `src/Art.tsx` and `src/styles.css` — original illustrations and responsive interface
+## Source
 
-This is the first playable foundation. The upgrade tracks and daily/offline systems support repeat visits, but weeks of retention will need playtesting and further content. Separate regional maps, production chains, seasonal events, cloud saves, and player accounts are natural next development steps.
+- `src/game/world.ts`: original procedural scenery, people, trees, fish, tools, and upgrade models.
+- `src/game/IslandScene.tsx`: navigation, follow camera, staged work animations, and world interaction.
+- `src/game/model.ts`: versioned economy, crafting, upgrades, jobs, and save migration.
+- `src/App.tsx`, `src/Art.tsx`, `src/styles.css`: touch controls, themed game menus, illustrations, and local saving.
+
+The video is a visual reference only; its footage and assets are not included. All models and illustrations are created in code. This remains a local single-player game; weeks-long retention and balancing require further playtesting.

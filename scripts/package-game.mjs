@@ -25,7 +25,8 @@ for (const link of html.matchAll(/<link\b[^>]*>/gi)) {
   }
 }
 for (const match of html.matchAll(/url\(\s*["']?([^\s"')]+)/g)) {
-  if (!match[1].startsWith("data:")) {
+  // SVG paint servers such as url(#steak-steak) refer to this same document.
+  if (!match[1].startsWith("data:") && !match[1].startsWith("#")) {
     throw new Error(
       `The downloadable game contains a non-embedded asset: ${match[1]}`,
     );

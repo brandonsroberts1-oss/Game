@@ -1,1447 +1,1263 @@
 import * as THREE from "three";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+import type { UpgradeId, Resource, GameState } from "./model";
 
-export type Resource = "wood" | "fish" | "salmon";
-
-export interface ResourceNode {
+export interface TreeNode {
   group: THREE.Group;
-  resource: Resource;
+  pivot: THREE.Group;
+  trunk: THREE.Mesh;
+  notch: THREE.Mesh;
+  stump: THREE.Group;
   position: THREE.Vector3;
-  hits: number;
-  depletedUntil: number;
-  baseScale: number;
-  region: string;
-  sway: number;
+  state: "standing" | "fallen" | "growing";
+  regrowAt: number;
+  originalScale: number;
 }
-
+export interface Station {
+  group: THREE.Group;
+  position: THREE.Vector3;
+  workPosition: THREE.Vector3;
+}
 export interface World {
   scene: THREE.Scene;
-  terrain: THREE.Object3D;
-  nodes: ResourceNode[];
-  market: THREE.Group;
-  cottage: THREE.Group;
-  boat: THREE.Group;
-  water: THREE.Mesh;
-  sparkles: THREE.InstancedMesh;
-  birds: THREE.Group[];
-  clouds: THREE.Group[];
   player: THREE.Group;
-  limbs: THREE.Object3D[];
-  decorations: THREE.Group[];
-  fishes: THREE.Group[];
+  rightArm: THREE.Group;
+  leftArm: THREE.Group;
+  legs: THREE.Group[];
+  cargo: THREE.Group;
+  axe: THREE.Group;
+  rod: THREE.Group;
+  bobber: THREE.Mesh;
+  fishingLine: THREE.Line;
+  trees: TreeNode[];
+  fish: THREE.Group[];
   customers: THREE.Group[];
-  obstacles: { x: number; z: number; width: number; depth: number }[];
-  isWalkable: (x: number, z: number) => boolean;
-  upgradeDecorations: {
-    market: THREE.Group[];
-    workshop: THREE.Group[];
-    crew: THREE.Group[];
+  stations: Record<"fish" | "steaks" | "planks" | "smoked" | "market", Station>;
+  cutter: {
+    cleaver: THREE.Group;
+    blade: THREE.Group;
+    secondBlade: THREE.Group;
+    piston: THREE.Group;
+    conveyor: THREE.Group;
+    fish: THREE.Group;
+    steaks: THREE.Group[];
   };
+  upgradeGroups: Record<UpgradeId, THREE.Group[]>;
+  smokePuffs: THREE.Mesh[];
+  water: THREE.Mesh;
+  isWalkable: (x: number, z: number) => boolean;
+  groundHeight: (x: number, z: number) => number;
+  applyUpgrades: (levels: GameState["upgrades"]) => THREE.Group[];
+  createItem: (resource: Resource) => THREE.Group;
   dispose: () => void;
 }
 
-/** An entirely original little world. All textures and models are made locally. */
+/** The entire playable yard is assembled here; no downloads or texture services. */
 export function createWorld(): World {
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color("#ccdfeb");
-  scene.fog = new THREE.Fog("#ccdfeb", 48, 130);
-  let seed = 82014;
+  scene.background = new THREE.Color("#c7deea");
+  scene.fog = new THREE.Fog("#c7deea", 50, 115);
+  let seed = 7919;
   const random = () => {
     seed = (seed * 1664525 + 1013904223) >>> 0;
     return seed / 4294967296;
   };
-  const palette = {
-    grass: "#e2ebf0",
-    grassLight: "#f6f9fb",
-    grassDark: "#bacfdc",
-    sand: "#f1f5f6",
-    soil: "#b7ccd9",
-    path: "#d7e1e5",
-    wood: "#8c6445",
-    woodLight: "#be9460",
-    leaf: "#7592a0",
-    leafLight: "#dbeaf0",
-    leafDark: "#486d7d",
-    cream: "#f5e6c6",
-    roof: "#bd7251",
-    roofLight: "#d68d60",
-    teal: "#45859c",
-    yellow: "#efc665",
-  };
   const mats = new Map<string, THREE.MeshStandardMaterial>();
-  const mat = (color: string, roughness = 1) => {
-    const key = `${color}-${roughness}`;
+  const material = (color: string, metalness = 0) => {
+    const key = color + metalness;
     if (!mats.has(key))
       mats.set(
         key,
-        new THREE.MeshStandardMaterial({ color, roughness, metalness: 0 }),
+        new THREE.MeshStandardMaterial({
+          color,
+          roughness: metalness ? 0.44 : 0.9,
+          metalness,
+        }),
       );
     return mats.get(key)!;
   };
-  const sphereGeometry = new THREE.SphereGeometry(1, 9, 7);
-  const smoothSphere = new THREE.SphereGeometry(1, 14, 10);
-  const boxGeometry = new THREE.BoxGeometry(1, 1, 1);
-  const cylinderGeometry = new THREE.CylinderGeometry(1, 1, 1, 10);
-  const coneGeometry = new THREE.ConeGeometry(1, 1, 9);
-  function mesh(
-    geometry: THREE.BufferGeometry,
-    color: string,
+  const cube = new THREE.BoxGeometry(1, 1, 1),
+    sphere = new THREE.SphereGeometry(1, 12, 9),
+    cone = new THREE.ConeGeometry(1, 1, 10),
+    cyl = new THREE.CylinderGeometry(1, 1, 1, 12);
+  function shape(
     parent: THREE.Object3D,
-    p: number[],
-    s: number[],
-    smooth = false,
-  ) {
-    const object = new THREE.Mesh(geometry, mat(color));
-    object.position.set(p[0], p[1], p[2]);
-    object.scale.set(s[0], s[1], s[2]);
-    object.castShadow = true;
-    object.receiveShadow = true;
-    if (smooth) object.material = mat(color, 0.82);
-    parent.add(object);
-    return object;
-  }
-  const box = (p: THREE.Object3D, c: string, pos: number[], scale: number[]) =>
-    mesh(boxGeometry, c, p, pos, scale);
-  const ball = (
-    p: THREE.Object3D,
-    c: string,
+    geo: THREE.BufferGeometry,
+    color: string,
     pos: number[],
     scale: number[],
-    smooth = false,
-  ) => mesh(smooth ? smoothSphere : sphereGeometry, c, p, pos, scale, smooth);
+    metalness = 0,
+  ) {
+    const m = new THREE.Mesh(geo, material(color, metalness));
+    m.position.set(pos[0], pos[1], pos[2]);
+    m.scale.set(scale[0], scale[1], scale[2]);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    parent.add(m);
+    return m;
+  }
+  const box = (p: THREE.Object3D, c: string, pos: number[], s: number[]) =>
+    shape(p, cube, c, pos, s);
+  const ball = (p: THREE.Object3D, c: string, pos: number[], s: number[]) =>
+    shape(p, sphere, c, pos, s);
   const cylinder = (
     p: THREE.Object3D,
     c: string,
     pos: number[],
-    scale: number[],
-  ) => mesh(cylinderGeometry, c, p, pos, scale);
-
-  const ambient = new THREE.HemisphereLight("#f0f8ff", "#8ba9c8", 1.85);
+    s: number[],
+    metal = 0,
+  ) => shape(p, cyl, c, pos, s, metal);
+  const group = (parent: THREE.Object3D, x = 0, y = 0, z = 0) => {
+    const g = new THREE.Group();
+    g.position.set(x, y, z);
+    parent.add(g);
+    return g;
+  };
+  // Batch stationary details by material while preserving all articulated groups.
+  const unusedGeometries = new Set<THREE.BufferGeometry>();
+  function batchDetails(root: THREE.Group) {
+    const batches = new Map<THREE.Material, THREE.Mesh[]>();
+    for (const child of [...root.children])
+      if (child instanceof THREE.Mesh && !Array.isArray(child.material)) {
+        const list = batches.get(child.material) || [];
+        list.push(child);
+        batches.set(child.material, list);
+      }
+    batches.forEach((meshes, mat) => {
+      if (meshes.length < 2) return;
+      const parts = meshes.map((m) => {
+        m.updateMatrix();
+        return m.geometry.clone().applyMatrix4(m.matrix);
+      });
+      const geometry = mergeGeometries(parts);
+      parts.forEach((p) => p.dispose());
+      if (!geometry) return;
+      const merged = new THREE.Mesh(geometry, mat);
+      merged.castShadow = true;
+      merged.receiveShadow = true;
+      meshes.forEach((m) => {
+        unusedGeometries.add(m.geometry);
+        root.remove(m);
+      });
+      root.add(merged);
+    });
+  }
+  const silver = "#cbdbe4",
+    yellow = "#edbc42",
+    timber = "#bf8050",
+    darkWood = "#805634",
+    snow = "#edf4f8",
+    teal = "#24a3b6";
+  const ambient = new THREE.HemisphereLight("#f6fbff", "#789ab8", 1.8);
   scene.add(ambient);
-  const sun = new THREE.DirectionalLight("#fff3df", 2.65);
-  sun.position.set(-12, 24, 11);
+  const sun = new THREE.DirectionalLight("#fff2d8", 2.8);
+  sun.position.set(-9, 24, 15);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.camera.left = -20;
-  sun.shadow.camera.right = 20;
-  sun.shadow.camera.top = 20;
-  sun.shadow.camera.bottom = -20;
+  sun.shadow.camera.left = -25;
+  sun.shadow.camera.right = 25;
+  sun.shadow.camera.top = 25;
+  sun.shadow.camera.bottom = -25;
   sun.shadow.camera.near = 1;
   sun.shadow.camera.far = 65;
-  sun.shadow.normalBias = 0.045;
-  sun.shadow.bias = -0.0003;
-  sun.shadow.radius = 5;
+  sun.shadow.normalBias = 0.035;
+  sun.shadow.bias = -0.00015;
+  sun.shadow.radius = 4;
   scene.add(sun);
-  const fill = new THREE.DirectionalLight("#d2efec", 0.55);
-  fill.position.set(16, 9, -14);
+  const fill = new THREE.DirectionalLight("#c6e3fa", 0.4);
+  fill.position.set(15, 10, -20);
   scene.add(fill);
-
+  // Square snowbanks and an uninterrupted river continue beyond the camera.
+  box(scene, "#c5dae6", [15, -0.4, 0], [44, 1.5, 160]);
+  box(scene, snow, [15, 0.21, 0], [44, 0.28, 160]);
+  box(scene, "#c5dae6", [-31, -0.4, 0], [36, 1.5, 160]);
+  box(scene, snow, [-31, 0.21, 0], [36, 0.28, 160]);
   const water = new THREE.Mesh(
-    new THREE.PlaneGeometry(350, 350),
+    new THREE.PlaneGeometry(6.1, 220, 1, 1),
     new THREE.MeshStandardMaterial({
-      color: "#0c82c6",
-      roughness: 0.46,
-      metalness: 0.12,
+      color: "#0876c0",
+      roughness: 0.35,
+      metalness: 0.23,
     }),
   );
   water.rotation.x = -Math.PI / 2;
-  water.position.y = -0.55;
+  water.position.set(-10.05, -0.25, 0);
   water.receiveShadow = true;
   scene.add(water);
-
-  function islandShape(rx: number, rz: number) {
-    const shape = new THREE.Shape();
-    for (let i = 0; i <= 72; i++) {
-      const edge = Math.acos(-3.92 / rx);
-      const a = -edge + (i / 72) * edge * 2;
-      const distortion =
-        1 + Math.sin(a * 3 + 0.8) * 0.027 + Math.cos(a * 5) * 0.022;
-      const x = Math.cos(a) * rx * distortion;
-      const y = Math.sin(a) * rz * distortion;
-      if (i === 0) shape.moveTo(x, y);
-      else shape.lineTo(x, y);
-    }
-    return shape;
+  // A translucent turquoise strip follows each icy bank.
+  for (const x of [-7.16, -12.93]) {
+    const shore = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.36, 200),
+      new THREE.MeshBasicMaterial({
+        color: "#63d7e5",
+        transparent: true,
+        opacity: 0.42,
+      }),
+    );
+    shore.rotation.x = -Math.PI / 2;
+    shore.position.set(x, -0.24, 0);
+    scene.add(shore);
   }
-  const shore = new THREE.Mesh(
-    new THREE.ExtrudeGeometry(islandShape(10.9, 8.5), {
-      depth: 0.68,
-      bevelEnabled: true,
-      bevelSegments: 3,
-      steps: 1,
-      bevelSize: 0.38,
-      bevelThickness: 0.28,
-    }),
-    [mat(palette.sand), mat("#a9c8d7")],
-  );
-  shore.rotation.x = -Math.PI / 2;
-  shore.position.y = -0.55;
-  shore.receiveShadow = true;
-  scene.add(shore);
-  const grass = new THREE.Mesh(
-    new THREE.ExtrudeGeometry(islandShape(9.9, 7.45), {
-      depth: 0.26,
-      bevelEnabled: true,
-      bevelSegments: 3,
-      steps: 1,
-      bevelSize: 0.35,
-      bevelThickness: 0.22,
-    }),
-    [mat(palette.grass), mat("#c5d9e4")],
-  );
-  grass.rotation.x = -Math.PI / 2;
-  grass.position.y = 0.16;
-  grass.receiveShadow = true;
-  scene.add(grass);
-  const terrain = new THREE.Mesh(
-    new THREE.PlaneGeometry(23, 19),
-    new THREE.MeshBasicMaterial({ visible: false }),
-  );
-  terrain.rotation.x = -Math.PI / 2;
-  terrain.position.y = 0.67;
-  scene.add(terrain);
-
-  const shadowCanvas = document.createElement("canvas");
-  shadowCanvas.width = shadowCanvas.height = 64;
-  const shadowContext = shadowCanvas.getContext("2d")!;
-  const gradient = shadowContext.createRadialGradient(32, 32, 2, 32, 32, 32);
-  gradient.addColorStop(0, "rgba(26,58,34,.27)");
-  gradient.addColorStop(0.5, "rgba(26,58,34,.14)");
-  gradient.addColorStop(1, "rgba(26,58,34,0)");
-  shadowContext.fillStyle = gradient;
-  shadowContext.fillRect(0, 0, 64, 64);
-  const shadowTexture = new THREE.CanvasTexture(shadowCanvas);
-  const contactMaterial = new THREE.MeshBasicMaterial({
-    map: shadowTexture,
-    transparent: true,
-    depthWrite: false,
-    polygonOffset: true,
-    polygonOffsetFactor: -1,
+  const woodCanvas = document.createElement("canvas");
+  woodCanvas.width = woodCanvas.height = 256;
+  const woodCtx = woodCanvas.getContext("2d")!;
+  woodCtx.fillStyle = "#bd8b71";
+  woodCtx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 16; i++) {
+    woodCtx.fillStyle =
+      i % 3 === 0 ? "#b7846c" : i % 3 === 1 ? "#bd8c73" : "#c4947a";
+    woodCtx.fillRect(0, i * 16, 256, 15);
+    woodCtx.fillStyle = "rgba(88,52,34,.19)";
+    woodCtx.fillRect(0, i * 16, 256, 1);
+    for (let j = 0; j < 9; j++) {
+      woodCtx.strokeStyle = "rgba(111,71,45,.065)";
+      woodCtx.beginPath();
+      const yy = i * 16 + random() * 14;
+      woodCtx.moveTo(random() * 230, yy);
+      woodCtx.lineTo(256, yy + random() * 2);
+      woodCtx.stroke();
+    }
+  }
+  const woodTexture = new THREE.CanvasTexture(woodCanvas);
+  woodTexture.colorSpace = THREE.SRGBColorSpace;
+  woodTexture.wrapS = woodTexture.wrapT = THREE.RepeatWrapping;
+  woodTexture.repeat.set(3, 3);
+  const floorMaterial = new THREE.MeshStandardMaterial({
+    map: woodTexture,
+    roughness: 1,
   });
-  function shadow(
-    parent: THREE.Object3D,
-    radius: number,
-    x = 0,
-    z = 0,
-    y = 0.015,
-  ) {
-    const shape = new THREE.Mesh(
-      new THREE.PlaneGeometry(radius * 2, radius * 2),
-      contactMaterial,
+  box(scene, "#a37153", [1.05, 0.13, 2.65], [12.9, 0.5, 11.7]);
+  const floor = new THREE.Mesh(
+    new THREE.BoxGeometry(12.9, 0.055, 11.7),
+    floorMaterial,
+  );
+  floor.position.set(1.05, 0.3725, 2.65);
+  floor.receiveShadow = true;
+  scene.add(floor);
+  for (const x of [-5.42, 7.52])
+    box(scene, "#d59b63", [x, 0.42, 2.65], [0.12, 0.13, 11.85]);
+  box(scene, "#d59b63", [1.05, 0.42, 8.55], [12.98, 0.13, 0.12]);
+  // Palisades are instanced, leaving a generous open entrance at the front.
+  const fencePositions: { x: number; z: number }[] = [];
+  for (let x = -5.25; x < 7.5; x += 0.23)
+    if (x < -3.8 || (x > 0.9 && x < 1.5) || x > 4.5)
+      fencePositions.push({ x, z: -3.28 });
+  for (let z = -3.1; z < 8.6; z += 0.23)
+    if (z < 0.05 || z > 2.1) fencePositions.push({ x: -5.55, z });
+  for (let z = -3.1; z < 8.6; z += 0.23)
+    if (z < 3.9 || z > 6.7) fencePositions.push({ x: 7.65, z });
+  for (let x = -5.25; x < 7.5; x += 0.23)
+    if (x < -2.9 || x > 4.9) fencePositions.push({ x, z: 8.72 });
+  const fenceLogs = new THREE.InstancedMesh(
+      cyl,
+      material("#cd8a52"),
+      fencePositions.length,
+    ),
+    fenceTips = new THREE.InstancedMesh(
+      cone,
+      material("#e3ac70"),
+      fencePositions.length,
     );
-    shape.raycast = () => {};
-    shape.rotation.x = -Math.PI / 2;
-    shape.position.set(x, y, z);
-    parent.add(shape);
-  }
-
-  // Softly curved footpaths avoid the hard rectangular grids of an editor map.
-  function path(points: THREE.Vector3[], width: number) {
-    const curve = new THREE.CatmullRomCurve3(points);
-    const left: THREE.Vector2[] = [],
-      right: THREE.Vector2[] = [];
-    for (let i = 0; i <= 36; i++) {
-      const t = i / 36,
-        point = curve.getPoint(t),
-        tangent = curve.getTangent(t);
-      left.push(
-        new THREE.Vector2(
-          point.x - tangent.z * width,
-          -point.z - tangent.x * width,
-        ),
+  const dummy = new THREE.Object3D();
+  fencePositions.forEach((p, i) => {
+    dummy.position.set(p.x, 1.04, p.z);
+    dummy.rotation.set(0, 0, 0);
+    dummy.scale.set(0.115, 1.3, 0.115);
+    dummy.updateMatrix();
+    fenceLogs.setMatrixAt(i, dummy.matrix);
+    dummy.position.y = 1.79;
+    dummy.scale.set(0.115, 0.2, 0.115);
+    dummy.updateMatrix();
+    fenceTips.setMatrixAt(i, dummy.matrix);
+  });
+  fenceLogs.castShadow = true;
+  fenceLogs.receiveShadow = true;
+  fenceTips.castShadow = true;
+  scene.add(fenceLogs, fenceTips);
+  let dockLevel = 0;
+  const onDock = (x: number, z: number) =>
+    x >= -6.48 - dockLevel * 0.43 &&
+    x <= -4.7 &&
+    Math.abs(z - 1) <= 0.84 + dockLevel * 0.06;
+  const groundHeight = (x: number, z: number) =>
+    onDock(x, z) || (x >= -5.55 && x <= 7.65 && z >= -3.3 && z <= 8.75)
+      ? 0.4
+      : 0.35;
+  // All reusable cargo items have true volume and distinct silhouettes.
+  function makeFish(smoked = false) {
+    const g = new THREE.Group(),
+      navy = smoked ? "#855b34" : "#123e87",
+      side = smoked ? "#c59a59" : "#69b8d6";
+    ball(g, side, [0, 0.025, 0], [0.48, 0.32, 1.45]);
+    ball(g, navy, [0, 0.2, -0.08], [0.33, 0.185, 1.35]);
+    ball(g, side, [0, -0.065, 0.12], [0.465, 0.255, 1.29]);
+    ball(
+      g,
+      smoked ? "#d5b782" : "#e3eff1",
+      [0, -0.17, 0.17],
+      [0.39, 0.15, 1.14],
+    );
+    for (const sign of [-1, 1]) {
+      const eye = cylinder(
+        g,
+        "#eff1d7",
+        [sign * 0.355, 0.09, 1.02],
+        [0.125, 0.045, 0.125],
+        0.3,
       );
-      right.push(
-        new THREE.Vector2(
-          point.x + tangent.z * width,
-          -point.z + tangent.x * width,
-        ),
+      eye.rotation.z = Math.PI / 2;
+      const pupil = cylinder(
+        g,
+        "#0c243a",
+        [sign * 0.383, 0.09, 1.02],
+        [0.075, 0.055, 0.075],
       );
-    }
-    const shape = new THREE.Shape([...left, ...right.reverse()]);
-    const object = new THREE.Mesh(
-      new THREE.ShapeGeometry(shape),
-      mat(palette.path),
-    );
-    object.rotation.x = -Math.PI / 2;
-    object.position.y = 0.672;
-    object.receiveShadow = true;
-    scene.add(object);
-  }
-  path(
-    [
-      new THREE.Vector3(5, 0, 7),
-      new THREE.Vector3(2.5, 0, 4.6),
-      new THREE.Vector3(0.5, 0, 2.8),
-      new THREE.Vector3(-1.8, 0, 0.8),
-    ],
-    0.58,
-  );
-  path(
-    [
-      new THREE.Vector3(1.3, 0, 3.5),
-      new THREE.Vector3(3.7, 0, 3),
-      new THREE.Vector3(4.3, 0, 1.6),
-    ],
-    0.48,
-  );
-  path(
-    [
-      new THREE.Vector3(-0.4, 0, 2),
-      new THREE.Vector3(-3.7, 0, 2.2),
-      new THREE.Vector3(-6.8, 0, 2.6),
-    ],
-    0.34,
-  );
-
-  const nodes: ResourceNode[] = [];
-  function tree(
-    x: number,
-    z: number,
-    scale: number,
-    region = "harbor",
-    evergreen = true,
-  ) {
-    const group = new THREE.Group();
-    group.position.set(x, 0.67, z);
-    group.scale.setScalar(scale);
-    shadow(group, 1.25);
-    const trunk = cylinder(
-      group,
-      palette.wood,
-      [0, 0.83, 0],
-      [0.22, 1.66, 0.22],
-    );
-    trunk.rotation.z = 0.06;
-    const branch = cylinder(
-      group,
-      palette.wood,
-      [0.22, 1.2, 0],
-      [0.09, 0.8, 0.09],
-    );
-    branch.rotation.z = -0.65;
-    if (evergreen) {
-      for (let i = 0; i < 3; i++) {
-        const cone = mesh(
-          coneGeometry,
-          [palette.leafDark, palette.leaf, palette.leafLight][i],
-          group,
-          [0, 1.5 + i * 0.65, 0],
-          [1.16 - i * 0.24, 1.65, 1.07 - i * 0.22],
+      pupil.rotation.z = Math.PI / 2;
+      ball(g, "#ffffff", [sign * 0.412, 0.12, 1.045], [0.02, 0.028, 0.028]);
+      const fin = box(g, navy, [sign * 0.53, -0.04, 0.05], [0.64, 0.04, 0.2]);
+      fin.rotation.y = sign * 0.58;
+      const gill = new THREE.Mesh(
+        new THREE.TorusGeometry(0.22, 0.018, 4, 12, Math.PI * 0.8),
+        material(smoked ? "#986d43" : "#3a829f"),
+      );
+      gill.rotation.y = (sign * Math.PI) / 2;
+      gill.rotation.z = -0.8;
+      gill.position.set(sign * 0.44, -0.02, 0.71);
+      g.add(gill);
+      for (let i = 0; i < 4; i++)
+        shape(
+          g,
+          cone,
+          smoked ? "#dcbd73" : "#e7c653",
+          [sign * 0.19, 0.18, -0.7 - i * 0.13],
+          [0.035, 0.11, 0.035],
         );
-        cone.rotation.y = i * 0.35;
-        const cap = mesh(
-          coneGeometry,
-          i === 2 ? "#f1f7fa" : "#d5e6ef",
-          group,
-          [0, 1.72 + i * 0.65, 0],
-          [1.02 - i * 0.215, 1.45, 0.94 - i * 0.197],
-        );
-        cap.rotation.y = i * 0.35;
-      }
-    } else {
-      const shade = [palette.leafLight, palette.leaf, "#74a35b"][
-        Math.floor(random() * 3)
-      ];
-      ball(group, palette.leafDark, [0, 1.85, 0.05], [1.02, 0.8, 0.95]);
-      ball(group, shade, [-0.55, 2.3, 0.1], [0.89, 0.94, 0.82]);
-      ball(group, shade, [0.52, 2.42, 0.1], [0.89, 1.02, 0.88]);
-      ball(group, palette.leafLight, [0, 2.94, -0.12], [0.76, 0.86, 0.76]);
-      ball(group, shade, [0.05, 2.35, -0.53], [0.82, 0.81, 0.75]);
     }
-    group.rotation.y = random() * Math.PI * 2;
-    group.visible = region === "harbor";
-    scene.add(group);
-    nodes.push({
-      group,
-      resource: "wood",
-      position: group.position.clone(),
-      hits: 0,
-      depletedUntil: 0,
-      baseScale: scale,
-      region,
-      sway: random() * 6,
-    });
-    return group;
-  }
-  tree(-1.6, -4.65, 0.93);
-  tree(1.1, -5.1, 1.06);
-  tree(4.4, -4.6, 0.96);
-  tree(7.4, -2.2, 0.92);
-  tree(7.7, 0.4, 0.73);
-  tree(6.4, 4.7, 0.8);
-  tree(1.8, -3.9, 0.8, "pinewood");
-  tree(6.2, -4.2, 1.08, "pinewood");
-  tree(7.7, -1.3, 0.95, "glacier");
-  // Frosty firs on the opposite bank frame the moving tuna below.
-  const leftBank = box(scene, "#e2edf2", [-14, -0.22, -1], [11, 1.5, 32]);
-  leftBank.receiveShadow = true;
-  for (const [x, z, h] of [
-    [-10.1, -5, 1.5],
-    [-12, -3, 1.3],
-    [-11.2, 1, 1.1],
-    [-10.4, 5.5, 1.25],
-    [-12.6, 6.4, 1.4],
-    [-9.8, -8, 1.2],
-  ]) {
-    const pine = tree(x, z, h);
-    pine.visible = true;
-    nodes.pop();
-  }
-  function fishingSpot(
-    x: number,
-    z: number,
-    resource: "fish" | "salmon",
-    region = "harbor",
-  ) {
-    const group = new THREE.Group();
-    group.position.set(x, 0.77, z);
-    const color = resource === "fish" ? "#f4cb68" : "#f3a89d";
-    const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(0.48, 0.065, 7, 32),
-      mat(color),
-    );
-    ring.rotation.x = Math.PI / 2;
-    ring.position.y = 0.055;
-    group.add(ring);
-    const float = ball(
-      group,
-      color,
-      [-0.6, 0.25, -0.07],
-      [0.1, 0.16, 0.1],
-      true,
-    );
-    float.userData.float = true;
-    const signpost = cylinder(
-      group,
-      "#b58a57",
-      [0.24, 0.4, -0.6],
-      [0.045, 0.8, 0.045],
-    );
-    const emblem = box(
-      group,
-      "#426d7e",
-      [0.24, 0.82, -0.6],
-      [0.65, 0.44, 0.09],
-    );
-    emblem.rotation.y = 0.2;
-    const smallFish = ball(
-      group,
-      "#e8f1e7",
-      [0.24, 0.82, -0.535],
-      [0.19, 0.08, 0.025],
-      true,
-    );
-    smallFish.rotation.y = 0.2;
-    group.visible = region === "harbor";
-    scene.add(group);
-    nodes.push({
-      group,
-      resource,
-      position: group.position.clone(),
-      hits: 0,
-      depletedUntil: 0,
-      baseScale: 1,
-      region,
-      sway: random() * 6,
-    });
-  }
-  fishingSpot(-3.45, 2.7, "fish");
-  fishingSpot(-3.45, -2.8, "salmon");
-  fishingSpot(-3.45, 4.7, "salmon", "salmonrun");
-  fishingSpot(-3.45, -4.3, "fish", "frostlake");
-  fishingSpot(5.8, 5.2, "salmon", "moonlit");
-  fishingSpot(-3.45, -5.5, "fish", "glacier");
-
-  // A timber harbor floor, broad enough to carry fish from the river to the shop.
-  const platform = new THREE.Group();
-  platform.position.set(0.7, 0.14, 2.25);
-  scene.add(platform);
-  box(platform, "#957052", [0, 0.28, 0], [9.15, 0.48, 6.4]);
-  for (let i = 0; i < 25; i++) {
-    const plank = box(
-      platform,
-      i % 3 === 0 ? "#b58a6e" : i % 3 === 1 ? "#bf9476" : "#c29b80",
-      [0, 0.56, -3.08 + i * 0.255],
-      [9.12, 0.12, 0.245],
-    );
-    plank.receiveShadow = true;
-  }
-  for (const x of [-4.55, 4.55])
-    box(platform, "#d0a582", [x, 0.6, 0], [0.1, 0.17, 6.45]);
-  for (const x of [-4.3, 4.3])
-    for (const z of [-2.8, 2.8])
-      cylinder(platform, "#8d694c", [x, -0.08, z], [0.18, 1.25, 0.18]);
-  function palisade(x: number, z: number, length: number, alongX: boolean) {
-    const fence = new THREE.Group();
-    fence.position.set(x, 0.62, z);
-    scene.add(fence);
-    const count = Math.round(length / 0.23);
-    for (let i = 0; i < count; i++) {
-      const h = 1.05 + Math.sin(i * 0.8) * 0.04;
-      const offset = (i - (count - 1) / 2) * 0.23;
-      cylinder(
-        fence,
-        i % 2 ? "#c48c5a" : "#d39864",
-        [alongX ? offset : 0, h / 2, alongX ? 0 : offset],
-        [0.115, h, 0.115],
-      );
-      mesh(
-        coneGeometry,
-        "#e2b17a",
-        fence,
-        [alongX ? offset : 0, h + 0.1, alongX ? 0 : offset],
-        [0.115, 0.2, 0.115],
-      );
-    }
-    box(
-      fence,
-      "#997149",
-      [0, 0.45, 0],
-      alongX ? [length, 0.09, 0.09] : [0.09, 0.09, length],
-    );
-  }
-  palisade(-1.5, 5.55, 4.6, true);
-  palisade(4.1, 5.55, 2.2, true);
-  palisade(5.4, 4.25, 2.5, false);
-  palisade(0.9, -0.97, 3.3, true);
-  // Two little bridge boards bring the fishing spots right to the river edge.
-  for (const z of [2.7, -2.8]) {
-    const pier = new THREE.Group();
-    pier.position.set(-3.8, 0.14, z);
-    scene.add(pier);
-    for (let i = 0; i < 5; i++)
-      box(pier, "#bf9161", [-0.12 - i * 0.22, 0.52, 0], [0.21, 0.14, 1.1]);
-    for (const dz of [-0.46, 0.46])
-      cylinder(pier, "#9e7750", [-1, 0.07, dz], [0.09, 1.1, 0.09]);
-  }
-
-  const fishes: THREE.Group[] = [];
-  function tuna(x: number, z: number, scale: number, salmon = false) {
-    const fish = new THREE.Group();
-    fish.position.set(x, -0.28, z);
-    fish.scale.setScalar(scale);
-    const back = salmon ? "#8b94a4" : "#174d92";
-    const side = salmon ? "#d9a7a3" : "#70bed5";
-    ball(fish, back, [0, 0, 0], [0.57, 0.36, 1.53], true);
-    ball(fish, side, [0, -0.07, 0.11], [0.55, 0.29, 1.35], true);
-    ball(fish, "#e5edf0", [0, -0.18, 0.24], [0.46, 0.19, 1.19], true);
-    // Thin blue dorsal crest and silvery pectoral fins.
-    const dorsalShape = new THREE.Shape();
-    dorsalShape.moveTo(0, 0);
-    dorsalShape.lineTo(-0.08, 0.62);
-    dorsalShape.lineTo(0.65, 0);
+    const finShape = new THREE.Shape([
+      new THREE.Vector2(0, 0),
+      new THREE.Vector2(0.7, 0),
+      new THREE.Vector2(0.12, 0.56),
+    ]);
     const dorsal = new THREE.Mesh(
-      new THREE.ShapeGeometry(dorsalShape),
-      new THREE.MeshStandardMaterial({ color: back, side: THREE.DoubleSide }),
+      new THREE.ShapeGeometry(finShape),
+      new THREE.MeshStandardMaterial({ color: navy, side: THREE.DoubleSide }),
     );
-    dorsal.position.set(0, 0.27, -0.3);
     dorsal.rotation.y = Math.PI / 2;
-    fish.add(dorsal);
-    for (const sideSign of [-1, 1]) {
-      const fin = box(
-        fish,
-        back,
-        [sideSign * 0.58, -0.06, 0.1],
-        [0.65, 0.045, 0.25],
-      );
-      fin.rotation.y = sideSign * 0.5;
-      ball(
-        fish,
-        "#f0f4eb",
-        [sideSign * 0.39, 0.08, 1.01],
-        [0.135, 0.145, 0.1],
-        true,
-      );
-      ball(
-        fish,
-        "#182a45",
-        [sideSign * 0.43, 0.08, 1.075],
-        [0.075, 0.09, 0.04],
-        true,
-      );
-      ball(
-        fish,
-        "#ffffff",
-        [sideSign * 0.45, 0.12, 1.11],
-        [0.025, 0.03, 0.02],
-        true,
-      );
-    }
-    const tail = new THREE.Group();
+    dorsal.position.set(0, 0.23, -0.35);
+    g.add(dorsal);
+    const tail = group(g, 0, 0, -1.23);
     tail.name = "tail";
-    tail.position.z = -1.3;
-    const tailShape = new THREE.Shape();
-    tailShape.moveTo(0, 0);
-    tailShape.lineTo(-0.75, -0.85);
-    tailShape.lineTo(0, -0.57);
-    tailShape.lineTo(0.75, -0.85);
-    tailShape.closePath();
+    const tailShape = new THREE.Shape([
+      new THREE.Vector2(0, 0),
+      new THREE.Vector2(-0.7, -0.82),
+      new THREE.Vector2(0, -0.52),
+      new THREE.Vector2(0.7, -0.82),
+    ]);
     const tailMesh = new THREE.Mesh(
       new THREE.ExtrudeGeometry(tailShape, {
-        depth: 0.065,
+        depth: 0.055,
         bevelEnabled: false,
       }),
-      mat(back),
+      material(navy),
     );
     tailMesh.rotation.x = Math.PI / 2;
     tail.add(tailMesh);
-    fish.add(tail);
-    fish.userData.basePosition = fish.position.clone();
-    fishes.push(fish);
-    scene.add(fish);
-    fish.userData.resource = salmon ? "salmon" : "fish";
-    return fish;
+    batchDetails(g);
+    return g;
   }
-  tuna(-6.35, 2.25, 1.18);
-  tuna(-6.5, -3.9, 1.03);
-  tuna(-6.2, 8.6, 0.88, true);
-
-  const customers: THREE.Group[] = [];
-  function customer(x: number, z: number, index: number) {
-    const group = new THREE.Group();
-    group.position.set(x, 0.62, z);
-    group.rotation.y = Math.PI * 0.8;
-    shadow(group, 0.48);
-    for (const lx of [-0.12, 0.12]) {
-      cylinder(group, "#3d5160", [lx, 0.2, 0], [0.095, 0.4, 0.095]);
-      ball(group, "#394c58", [lx, 0.04, 0.06], [0.12, 0.08, 0.15], true);
-    }
-    cylinder(
-      group,
-      index % 2 ? "#e8c969" : "#d9b953",
-      [0, 0.67, 0],
-      [0.245, 0.58, 0.21],
-    );
-    for (const lx of [-0.29, 0.29])
-      cylinder(group, "#eed375", [lx, 0.65, 0], [0.08, 0.4, 0.08]);
-    ball(group, "#e9c6aa", [0, 1.06, 0], [0.205, 0.23, 0.2], true);
-    cylinder(group, "#f0f0df", [0, 1.23, 0], [0.23, 0.13, 0.22]);
-    ball(group, "#fbfbec", [0, 1.34, 0], [0.075, 0.075, 0.075], true);
-    box(
-      group,
-      index % 2 ? "#a8c0c8" : "#e7e9dd",
-      [0, 0.88, 0.05],
-      [0.43, 0.09, 0.2],
-    );
-    for (const lx of [-0.07, 0.07])
-      ball(group, "#3b4851", [lx, 1.08, 0.19], [0.02, 0.026, 0.01], true);
-    customers.push(group);
-    scene.add(group);
-  }
-  customer(5.85, 2.2, 0);
-  customer(5.9, 3.35, 1);
-  customer(6.1, 4.5, 2);
-  const obstacles = [
-    { x: -2, z: -0.65, width: 3.45, depth: 2.7 },
-    { x: 4.2, z: 1.15, width: 3.15, depth: 2.7 },
-  ];
-  const isWalkable = (x: number, z: number) =>
-    x >= -3.72 && (x * x) / 90 + (z * z) / 49 < 1;
-
-  const cottage = new THREE.Group();
-  cottage.position.set(-2, 0.67, -0.65);
-  cottage.rotation.y = -0.12;
-  cottage.userData.kind = "cottage";
-  scene.add(cottage);
-  shadow(cottage, 3.2, 0, 0.3);
-  box(cottage, "#bca67c", [0, 0.1, 0], [3.9, 0.22, 3.1]);
-  box(cottage, palette.cream, [0, 1.15, 0], [3.35, 2.15, 2.6]);
-  box(cottage, "#e3d1ac", [0, 0.35, 1.315], [3.4, 0.32, 0.08]);
-  const roofShape = new THREE.Shape();
-  roofShape.moveTo(-2, 0);
-  roofShape.lineTo(0, 1.36);
-  roofShape.lineTo(2, 0);
-  roofShape.lineTo(-2, 0);
-  const roof = new THREE.Mesh(
-    new THREE.ExtrudeGeometry(roofShape, {
-      depth: 3.35,
-      bevelEnabled: true,
-      bevelSegments: 1,
-      bevelSize: 0.035,
-      bevelThickness: 0.04,
-    }),
-    mat("#dceaf0"),
-  );
-  roof.position.set(0, 2.18, -1.7);
-  roof.castShadow = roof.receiveShadow = true;
-  cottage.add(roof);
-  // Terracotta ridges and timber fascia give the roof a crafted, toy-like finish.
-  for (let i = 0; i < 7; i++) {
-    const ridge = cylinder(
-      cottage,
-      "#f5f8f6",
-      [0, 3.53, -1.58 + i * 0.51],
-      [0.105, 0.53, 0.105],
-    );
-    ridge.rotation.x = Math.PI / 2;
-  }
-  const fasciaL = box(
-    cottage,
-    "#e5b075",
-    [-0.99, 2.86, 1.73],
-    [2.45, 0.14, 0.13],
-  );
-  fasciaL.rotation.z = 0.596;
-  const fasciaR = box(
-    cottage,
-    "#e5b075",
-    [0.99, 2.86, 1.73],
-    [2.45, 0.14, 0.13],
-  );
-  fasciaR.rotation.z = -0.596;
-  box(cottage, "#b27e54", [0, 2.14, 1.36], [3.5, 0.14, 0.12]);
-  for (const x of [-1.6, 1.6])
-    box(cottage, "#b49063", [x, 1.12, 1.35], [0.14, 2.1, 0.12]);
-  // Sea-green cottage door with brass knob and a shallow front step.
-  box(cottage, "#6b8f7c", [0.45, 0.82, 1.345], [0.85, 1.54, 0.12]);
-  box(cottage, "#c5ab7b", [0.45, 1.62, 1.42], [1, 0.12, 0.15]);
-  ball(cottage, "#e5bc65", [0.72, 0.81, 1.44], [0.06, 0.06, 0.06], true);
-  box(cottage, "#d0bb8e", [0.45, 0.14, 1.65], [1.17, 0.24, 0.63]);
-  function windowAt(x: number, y: number, z: number) {
-    box(cottage, "#aa8058", [x, y, z], [0.91, 0.98, 0.11]);
-    box(cottage, "#9bc1b3", [x, y, z + 0.065], [0.7, 0.76, 0.04]);
-    box(cottage, palette.cream, [x, y, z + 0.1], [0.06, 0.81, 0.06]);
-    box(cottage, palette.cream, [x, y, z + 0.1], [0.75, 0.06, 0.06]);
-    box(cottage, "#bd885b", [x, y - 0.54, z + 0.16], [1, 0.17, 0.35]);
-    for (let i = 0; i < 3; i++)
-      ball(
-        cottage,
-        "#749756",
-        [x - 0.25 + i * 0.25, y - 0.39, z + 0.2],
-        [0.2, 0.18, 0.18],
-      );
-  }
-  windowAt(-0.95, 1.25, 1.34);
-  const roundWindow = cylinder(
-    cottage,
-    "#e9ce9a",
-    [0, 2.75, 1.7],
-    [0.27, 0.1, 0.27],
-  );
-  roundWindow.rotation.x = Math.PI / 2;
-  const glass = cylinder(
-    cottage,
-    "#81afa4",
-    [0, 2.75, 1.77],
-    [0.18, 0.1, 0.18],
-  );
-  glass.rotation.x = Math.PI / 2;
-  box(cottage, "#aa8061", [0.9, 3.12, -0.6], [0.48, 1.25, 0.55]);
-  box(cottage, "#d7bb91", [0.9, 3.78, -0.6], [0.65, 0.17, 0.7]);
-  const smoke = new THREE.Group();
-  smoke.position.set(-1.15, 4.55, -1.25);
-  for (let i = 0; i < 3; i++) {
-    const puff = ball(
-      smoke,
-      "#e9edd8",
-      [i * 0.26, i * 0.37, 0],
-      [0.22 + i * 0.09, 0.22 + i * 0.07, 0.22 + i * 0.09],
-      true,
-    );
-    (puff.material as THREE.MeshStandardMaterial).transparent = true;
-    (puff.material as THREE.MeshStandardMaterial).opacity = 0.6;
-    puff.castShadow = false;
-  }
-  scene.add(smoke);
-
-  const market = new THREE.Group();
-  market.position.set(4.2, 0.67, 1.15);
-  market.rotation.y = -0.12;
-  market.userData.kind = "market";
-  scene.add(market);
-  shadow(market, 2.3);
-  for (const x of [-1.35, 1.35])
-    for (const z of [-0.75, 0.75])
-      cylinder(market, palette.wood, [x, 1.18, z], [0.065, 2.36, 0.065]);
-  box(market, palette.wood, [0, 0.72, 0.45], [2.9, 0.82, 1.2]);
-  for (let i = 0; i < 8; i++)
-    box(
-      market,
-      i % 2 ? "#bd9260" : "#c89e6b",
-      [-1.27 + i * 0.36, 0.77, 1.06],
-      [0.34, 0.84, 0.045],
-    );
-  box(market, "#e4bc7d", [0, 1.18, 0.45], [3.1, 0.13, 1.4]);
-  // Each awning stripe follows a genuinely curved canopy.
-  for (let stripe = 0; stripe < 9; stripe++) {
-    const positions: number[] = [],
-      indices: number[] = [];
-    const x = -1.58 + stripe * 0.35;
-    for (let k = 0; k <= 10; k++) {
-      const t = k / 10,
-        z = -1 + t * 2.5,
-        y = 2.48 + Math.sin(t * Math.PI) * 0.26 - t * 0.3;
-      positions.push(x, y, z, x + 0.35, y, z);
-      if (k < 10) {
-        const n = k * 2;
-        indices.push(n, n + 1, n + 2, n + 1, n + 3, n + 2);
+  const fishTemplate = makeFish(),
+    smokedTemplate = makeFish(true);
+  const itemTemplates = new Map<Resource, THREE.Group>();
+  function buildItem(resource: Resource): THREE.Group {
+    const g = new THREE.Group();
+    g.userData.resource = resource;
+    if (resource === "fish" || resource === "salmon" || resource === "smoked") {
+      const fishBody = (
+        resource === "smoked" ? smokedTemplate : fishTemplate
+      ).clone(true);
+      fishBody.scale.setScalar(0.38);
+      fishBody.rotation.y = Math.PI / 2;
+      g.add(fishBody);
+      if (resource === "salmon") {
+        const stripe = ball(
+          g,
+          "#cf9696",
+          [0, 0.015, 0.045],
+          [0.47, 0.035, 0.12],
+        );
+        stripe.rotation.z = 0.03;
       }
+    } else if (resource === "wood") {
+      const log = cylinder(g, "#95613b", [0, 0, 0], [0.15, 1.08, 0.15]);
+      log.rotation.z = Math.PI / 2;
+      for (const x of [-0.55, 0.55]) {
+        const end = cylinder(g, "#dfb87c", [x, 0, 0], [0.137, 0.025, 0.137]);
+        end.rotation.z = Math.PI / 2;
+        const ring = new THREE.Mesh(
+          new THREE.RingGeometry(0.073, 0.083, 16),
+          material("#b18751"),
+        );
+        ring.rotation.y = Math.PI / 2;
+        ring.position.set(x + Math.sign(x) * 0.014, 0, 0);
+        g.add(ring);
+      }
+      for (let i = 0; i < 3; i++)
+        box(g, "#805333", [-0.2 + i * 0.25, 0.14, 0], [0.02, 0.013, 0.13]);
+    } else if (resource === "steak") {
+      cylinder(g, "#f4debe", [0, 0, 0], [0.24, 0.15, 0.24]);
+      cylinder(g, "#e2676e", [0, 0.082, 0], [0.211, 0.014, 0.211]);
+      cylinder(g, "#fff0ca", [0, 0.096, 0], [0.048, 0.018, 0.048]);
+      for (const a of [0.3, 2.4, 4.6]) {
+        const grain = box(
+          g,
+          "#f3b4a1",
+          [Math.cos(a) * 0.12, 0.094, Math.sin(a) * 0.12],
+          [0.13, 0.009, 0.014],
+        );
+        grain.rotation.y = -a;
+      }
+    } else {
+      for (let i = 0; i < 2; i++)
+        box(g, i ? "#d5a773" : "#bd8c59", [0, i * 0.1, 0], [0.97, 0.09, 0.24]);
+      box(g, "#ebc594", [0, 0.205, 0], [0.11, 0.02, 0.245]);
     }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute(
-      "position",
-      new THREE.Float32BufferAttribute(positions, 3),
-    );
-    geometry.setIndex(indices);
-    geometry.computeVertexNormals();
-    const canopy = new THREE.Mesh(
-      geometry,
-      mat(stripe % 2 ? palette.cream : "#5791aa"),
-    );
-    canopy.material.side = THREE.DoubleSide;
-    canopy.castShadow = true;
-    canopy.receiveShadow = true;
-    market.add(canopy);
-    box(
-      market,
-      stripe % 2 ? palette.cream : "#5791aa",
-      [x + 0.175, 2.1, 1.5],
-      [0.35, 0.25, 0.06],
-    );
-    const scallop = ball(
-      market,
-      stripe % 2 ? palette.cream : "#5791aa",
-      [x + 0.175, 1.99, 1.5],
-      [0.175, 0.1, 0.035],
-      true,
-    );
-    scallop.castShadow = false;
+    batchDetails(g);
+    return g;
   }
-  for (const x of [-0.94, 0, 0.94]) {
-    box(market, "#866242", [x, 1.33, 0.46], [0.82, 0.22, 0.85]);
-    for (let i = 0; i < 5; i++)
-      ball(
-        market,
-        x < -0.2 ? "#7bacc8" : x > 0.2 ? "#b4cedb" : "#c98780",
-        [
-          x + (i % 2) * 0.23 - 0.1,
-          1.55 + Math.floor(i / 3) * 0.12,
-          0.22 + Math.floor(i / 2) * 0.2,
-        ],
-        [0.15, 0.14, 0.15],
-        true,
-      );
-  }
-  function crate(parent: THREE.Object3D, x: number, z: number, size = 0.6) {
-    box(parent, "#a47d4f", [x, size / 2, z], [size, size, size]);
-    for (const y of [0.08, 0.45])
-      box(
-        parent,
-        "#c79d63",
-        [x, y, z + size / 2 + 0.01],
-        [size + 0.04, 0.07, 0.06],
-      );
-    box(
-      parent,
-      "#d8ad71",
-      [x, size / 2, z + size / 2 + 0.04],
-      [0.06, size, 0.04],
-    );
-  }
-  crate(market, -2.05, 0.6, 0.7);
-  crate(market, -1.94, -0.2, 0.56);
-  const sign = box(market, "#497765", [0, 2.68, -0.95], [1.2, 0.36, 0.09]);
-  sign.userData.sign = true;
-  const signCanvas = document.createElement("canvas");
-  signCanvas.width = 512;
-  signCanvas.height = 128;
-  const signContext = signCanvas.getContext("2d")!;
-  signContext.fillStyle = "#315f73";
-  signContext.fillRect(0, 0, 512, 128);
-  signContext.strokeStyle = "#d9d9ba";
-  signContext.lineWidth = 8;
-  signContext.strokeRect(9, 9, 494, 110);
-  signContext.fillStyle = "#fff3d3";
-  signContext.font = "bold 54px Georgia,serif";
-  signContext.textAlign = "center";
-  signContext.textBaseline = "middle";
-  signContext.fillText("FRESH FISH", 256, 66);
-  const signTexture = new THREE.CanvasTexture(signCanvas);
-  signTexture.colorSpace = THREE.SRGBColorSpace;
-  const signFace = new THREE.Mesh(
-    new THREE.PlaneGeometry(1.8, 0.45),
-    new THREE.MeshBasicMaterial({ map: signTexture }),
-  );
-  signFace.position.set(0, 2.28, 1.56);
-  market.add(signFace);
-
-  // Dock, mooring posts, and tiny sailboat make the island feel connected.
-  const dock = new THREE.Group();
-  dock.position.set(5, -0.05, 8.6);
-  scene.add(dock);
-  for (let i = 0; i < 12; i++)
-    box(
-      dock,
-      i % 2 ? "#ba9468" : "#c49e70",
-      [0, 0.2, -2 + i * 0.37],
-      [1.7, 0.14, 0.34],
-    );
-  for (const x of [-0.75, 0.75])
-    for (const z of [-1.7, 0.1, 1.9]) {
-      cylinder(dock, "#8e7150", [x, -0.05, z], [0.095, 1.4, 0.095]);
-      cylinder(dock, "#ddc59b", [x, 0.65, z], [0.13, 0.11, 0.13]);
+  // Cargo, flight props, and conveyor goods share immutable geometry/materials.
+  // Removing an old stack therefore never leaves newly allocated GPU buffers behind.
+  function createItem(resource: Resource): THREE.Group {
+    let template = itemTemplates.get(resource);
+    if (!template) {
+      template = buildItem(resource);
+      itemTemplates.set(resource, template);
     }
-  box(dock, "#83664a", [-0.65, -0.05, 0.1], [0.1, 0.15, 4.6]);
-  box(dock, "#83664a", [0.65, -0.05, 0.1], [0.1, 0.15, 4.6]);
-  const boat = new THREE.Group();
-  boat.position.set(-6.4, -0.23, 8.3);
-  boat.rotation.y = -0.55;
-  scene.add(boat);
-  const hullShape = new THREE.Shape();
-  hullShape.moveTo(-0.65, -0.95);
-  hullShape.quadraticCurveTo(-0.98, 0.15, 0, 1.55);
-  hullShape.quadraticCurveTo(0.98, 0.15, 0.65, -0.95);
-  hullShape.quadraticCurveTo(0, -1.35, -0.65, -0.95);
-  const hull = new THREE.Mesh(
-    new THREE.ExtrudeGeometry(hullShape, {
-      depth: 0.38,
-      bevelEnabled: true,
-      bevelSegments: 2,
-      bevelThickness: 0.12,
-      bevelSize: 0.12,
-    }),
-    mat("#487b75"),
-  );
-  hull.rotation.x = -Math.PI / 2;
-  hull.castShadow = true;
-  boat.add(hull);
-  const deck = new THREE.Mesh(
-    new THREE.ShapeGeometry(hullShape),
-    mat("#d5b589"),
-  );
-  deck.rotation.x = -Math.PI / 2;
-  deck.position.y = 0.51;
-  deck.scale.setScalar(0.85);
-  boat.add(deck);
-  cylinder(boat, "#96744e", [0, 2.1, -0.05], [0.055, 3.3, 0.055]);
-  const sailShape = new THREE.Shape();
-  sailShape.moveTo(0.1, 0.9);
-  sailShape.lineTo(0.1, 3.65);
-  sailShape.quadraticCurveTo(1.05, 2.4, 1.4, 0.9);
-  sailShape.lineTo(0.1, 0.9);
-  const sail = new THREE.Mesh(
-    new THREE.ShapeGeometry(sailShape),
-    new THREE.MeshStandardMaterial({
-      color: "#fff1ce",
-      roughness: 1,
-      side: THREE.DoubleSide,
-    }),
-  );
-  sail.position.z = -0.05;
-  sail.rotation.y = -0.25;
-  sail.castShadow = true;
-  boat.add(sail);
-  const flagShape = new THREE.Shape();
-  flagShape.moveTo(0, 0);
-  flagShape.lineTo(0.61, -0.14);
-  flagShape.lineTo(0, -0.32);
-  const flag = new THREE.Mesh(
-    new THREE.ShapeGeometry(flagShape),
-    new THREE.MeshStandardMaterial({
-      color: "#c57a54",
-      side: THREE.DoubleSide,
-    }),
-  );
-  flag.position.set(0, 3.85, -0.05);
-  boat.add(flag);
-  cylinder(boat, "#eddfb8", [0, 0.65, -0.95], [0.19, 0.3, 0.19]);
-
-  // Scattered detail is instanced: a rich ground plane with very few draw calls.
-  const blades = new THREE.InstancedMesh(
-    new THREE.ConeGeometry(0.035, 0.22, 3),
-    mat("#f3f7f7"),
-    380,
-  );
-  const blossoms = new THREE.InstancedMesh(
-    new THREE.SphereGeometry(0.045, 5, 4),
-    mat("#f6fafc"),
-    110,
-  );
-  const fieldStones = new THREE.InstancedMesh(
-    new THREE.IcosahedronGeometry(0.12, 0),
-    mat("#bbcfd8"),
-    65,
-  );
-  const dummy = new THREE.Object3D();
-  function fieldPoint() {
-    let x = 0,
-      z = 0;
-    for (let attempt = 0; attempt < 50; attempt++) {
-      x = (random() - 0.5) * 18.5;
-      z = (random() - 0.5) * 13.5;
-      const inside = x > -3.65 && (x * x) / 88 + (z * z) / 47 < 1;
-      const house = x > -4.3 && x < 0.2 && z > -2.6 && z < 1.9;
-      const marketZone = x > 2.4 && x < 6 && z > -0.2 && z < 3.4;
-      const pathZone =
-        Math.abs(z - 0.8 * x - 2.9) < 0.9 ||
-        (Math.abs(z - 2.4) < 0.65 && x < 4.6 && x > -7);
-      if (inside && !house && !marketZone && !pathZone) break;
-    }
-    return [x, z];
+    return template.clone(true);
   }
-  for (let i = 0; i < 380; i++) {
-    const [x, z] = fieldPoint();
-    dummy.position.set(x, 0.72, z);
-    dummy.rotation.set(
-      (random() - 0.5) * 0.5,
-      random() * 6,
-      (random() - 0.5) * 0.5,
-    );
-    dummy.scale.setScalar(0.6 + random() * 0.8);
-    dummy.updateMatrix();
-    blades.setMatrixAt(i, dummy.matrix);
-  }
-  for (let i = 0; i < 110; i++) {
-    const [x, z] = fieldPoint();
-    dummy.position.set(x, 0.81, z);
-    dummy.rotation.set(0, 0, 0);
-    dummy.scale.setScalar(0.7 + random() * 0.7);
-    dummy.updateMatrix();
-    blossoms.setMatrixAt(i, dummy.matrix);
-  }
-  for (let i = 0; i < 65; i++) {
-    const [x, z] = fieldPoint();
-    dummy.position.set(x, 0.7, z);
-    dummy.rotation.set(random(), random() * 6, random());
-    dummy.scale.set(0.5 + random(), 0.2 + random() * 0.6, 0.5 + random());
-    dummy.updateMatrix();
-    fieldStones.setMatrixAt(i, dummy.matrix);
-  }
-  blades.receiveShadow =
-    blossoms.receiveShadow =
-    fieldStones.receiveShadow =
-      true;
-  scene.add(blades, blossoms, fieldStones);
-  // Tiny free-standing ferns around the edge of the wood.
-  for (let i = 0; i < 11; i++) {
-    const [x, z] = fieldPoint();
-    const fern = new THREE.Group();
-    fern.position.set(x, 0.67, z);
-    for (let k = 0; k < 3; k++) {
-      const leaf = ball(
-        fern,
-        "#c5dce4",
-        [Math.sin(k * 2.1) * 0.14, 0.13, Math.cos(k * 2.1) * 0.14],
-        [0.13, 0.35, 0.08],
-      );
-      leaf.rotation.z = Math.sin(k * 2.1) * 0.7;
-      leaf.rotation.x = Math.cos(k * 2.1) * 0.7;
-    }
-    scene.add(fern);
-  }
-  // Beach pebbles and tide lines.
-  for (let i = 0; i < 14; i++) {
-    const a = random() * Math.PI * 2;
-    const rock = ball(
-      scene,
-      "#edf5f8",
-      [Math.cos(a) * 10.4, 0.12, Math.sin(a) * 8.1],
-      [0.11 + random() * 0.16, 0.1, 0.15 + random() * 0.18],
-    );
-    rock.castShadow = false;
-  }
-  const tideGeometry = new THREE.RingGeometry(1, 1.015, 100);
-  const tideMaterial = new THREE.MeshBasicMaterial({
-    color: "#d8f0dd",
-    transparent: true,
-    opacity: 0.55,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-  });
-  for (let i = 0; i < 1; i++) {
-    const ripple = new THREE.Mesh(tideGeometry, tideMaterial);
-    ripple.rotation.x = -Math.PI / 2;
-    ripple.scale.set(11.5 + i * 0.48, 9 + i * 0.35, 1);
-    ripple.position.y = -0.53 + i * 0.002;
-    scene.add(ripple);
-  }
-  const sparkles = new THREE.InstancedMesh(
-    new THREE.PlaneGeometry(0.1, 0.48),
-    new THREE.MeshBasicMaterial({
-      color: "#d7f6e9",
-      transparent: true,
-      opacity: 0.45,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    }),
-    75,
-  );
-  for (let i = 0; i < 75; i++) {
-    dummy.position.set(-4.5 - random() * 3.5, -0.5, (random() - 0.5) * 32);
-    dummy.rotation.set(-Math.PI / 2, 0, random() * 0.4);
-    dummy.scale.set(1, 0.5 + random() * 2, 1);
-    dummy.updateMatrix();
-    sparkles.setMatrixAt(i, dummy.matrix);
-  }
-  scene.add(sparkles);
-
-  const player = new THREE.Group();
-  player.position.set(0.1, 0.67, 3.7);
-  scene.add(player);
-  const limbs: THREE.Object3D[] = [];
-  shadow(player, 0.5);
-  const trouser = "#375365",
-    skin = "#eac6a0";
-  for (const x of [-0.14, 0.14]) {
-    const pivot = new THREE.Group();
-    pivot.position.set(x, 0.53, 0);
-    player.add(pivot);
-    cylinder(pivot, trouser, [0, -0.19, 0], [0.115, 0.38, 0.115]);
-    ball(pivot, "#695748", [0, -0.39, 0.07], [0.13, 0.09, 0.2], true);
-    limbs.push(pivot);
-  }
-  cylinder(player, "#358fa8", [0, 0.75, 0], [0.28, 0.54, 0.22]);
-  ball(player, "#61a9ba", [0, 1.02, 0], [0.28, 0.16, 0.23], true);
-  for (const x of [-0.32, 0.32]) {
-    const pivot = new THREE.Group();
-    pivot.position.set(x, 0.94, 0);
-    player.add(pivot);
-    cylinder(pivot, "#358fa8", [0, -0.1, 0], [0.11, 0.24, 0.11]);
-    cylinder(pivot, skin, [0, -0.29, 0], [0.075, 0.2, 0.075]);
-    ball(pivot, skin, [0, -0.41, 0.02], [0.09, 0.1, 0.085], true);
-    limbs.push(pivot);
-  }
-  ball(player, skin, [0, 1.27, 0], [0.245, 0.27, 0.23], true);
-  ball(player, "#6f5540", [0, 1.38, -0.1], [0.25, 0.23, 0.19], true);
-  ball(player, skin, [0, 1.25, 0.04], [0.23, 0.23, 0.22], true);
-  for (const x of [-0.085, 0.085])
-    ball(player, "#4c4d3b", [x, 1.29, 0.246], [0.025, 0.035, 0.015], true);
-  cylinder(player, "#f0f0dc", [0, 1.5, 0], [0.27, 0.2, 0.25]);
-  ball(player, "#faf8ed", [0, 1.66, 0], [0.1, 0.1, 0.1], true);
-  box(player, "#d98b68", [0, 1.04, 0.1], [0.48, 0.1, 0.25]);
-  const brim = cylinder(
-    player,
-    "#e6ebd9",
-    [0, 1.45, 0.065],
-    [0.34, 0.045, 0.33],
-  );
-  brim.rotation.x = -0.08;
-  box(player, "#af7e4d", [0, 0.78, -0.26], [0.35, 0.44, 0.2]);
-  box(player, "#d7ae66", [0, 0.93, -0.38], [0.37, 0.12, 0.06]);
-  for (const x of [-0.19, 0.19])
-    box(player, "#997443", [x, 0.85, -0.12], [0.04, 0.36, 0.08]);
-
-  const birds: THREE.Group[] = [];
-  for (let i = 0; i < 3; i++) {
-    const bird = new THREE.Group();
-    bird.position.set(-7 + i * 1.2, 6.4 + i * 0.4, -1 - i * 0.7);
-    for (const side of [-1, 1]) {
-      const wing = box(
-        bird,
-        "#fff3d7",
-        [side * 0.19, 0, 0],
-        [0.4, 0.035, 0.12],
-      );
-      wing.rotation.z = side * 0.23;
-    }
-    ball(bird, "#ece9d7", [0, -0.03, 0.02], [0.12, 0.08, 0.18], true);
-    bird.userData.basePosition = bird.position.clone();
-    birds.push(bird);
-    scene.add(bird);
-  }
-  const clouds: THREE.Group[] = [smoke];
-  for (let i = 0; i < 2; i++) {
-    const cloud = new THREE.Group();
-    cloud.position.set(i === 0 ? -13 : 12, 8 + i, -9 - i * 3);
-    for (let j = 0; j < 4; j++) {
-      const puff = ball(
-        cloud,
-        "#e7f0d9",
-        [j * 0.65, Math.sin(j * 2) * 0.15, 0],
-        [0.78, 0.38 + (j % 2) * 0.2, 0.5],
-        true,
-      );
-      puff.castShadow = false;
-    }
-    cloud.userData.basePosition = cloud.position.clone();
-    clouds.push(cloud);
-    scene.add(cloud);
-  }
-  const decorations: THREE.Group[] = [];
-  // Unlocks add a tiny piece of island life as well as new harvest nodes.
-  const orchard = new THREE.Group();
-  orchard.position.set(7.3, 0.67, 1.8);
-  orchard.userData.region = "salmonrun";
-  orchard.visible = false;
-  for (let i = 0; i < 3; i++) {
-    box(orchard, "#b3cddd", [i * 0.45, 0.03, 0], [0.35, 0.05, 1.25]);
-    for (let j = 0; j < 3; j++)
-      ball(
-        orchard,
-        "#789fb7",
-        [i * 0.45, 0.15, -0.4 + j * 0.4],
-        [0.19, 0.15, 0.18],
-      );
-  }
-  scene.add(orchard);
-  decorations.push(orchard);
-  const quarryCart = new THREE.Group();
-  quarryCart.position.set(7.2, 0.67, 3.8);
-  quarryCart.userData.region = "frostlake";
-  quarryCart.visible = false;
-  box(quarryCart, "#99764b", [0, 0.45, 0], [0.95, 0.5, 1.25]);
-  for (const x of [-0.52, 0.52])
-    for (const z of [-0.35, 0.35]) {
-      const wheel = cylinder(
-        quarryCart,
-        "#655d49",
-        [x, 0.2, z],
-        [0.2, 0.1, 0.2],
-      );
-      wheel.rotation.z = Math.PI / 2;
-    }
-  ball(quarryCart, "#9fa595", [0, 0.84, 0], [0.42, 0.35, 0.47]);
-  scene.add(quarryCart);
-  decorations.push(quarryCart);
-  const processing = new THREE.Group();
-  processing.position.set(4.3, 0.67, -3.1);
-  processing.userData.region = "moonlit";
-  processing.visible = false;
-  box(processing, "#527e92", [0, 0.65, 0], [1.25, 1.25, 1.45]);
-  box(processing, "#e5edf0", [0, 1.34, 0], [1.4, 0.16, 1.6]);
-  box(processing, "#294f67", [0, 0.85, 0.74], [0.83, 0.45, 0.05]);
-  cylinder(processing, "#b9cad5", [-0.35, 1.75, -0.35], [0.12, 0.7, 0.12]);
-  ball(processing, "#e2b96a", [0.34, 0.85, 0.81], [0.09, 0.09, 0.04], true);
-  scene.add(processing);
-  decorations.push(processing);
-  const lantern = new THREE.Group();
-  lantern.position.set(6.7, 0.67, -1);
-  lantern.userData.region = "glacier";
-  lantern.visible = false;
-  cylinder(lantern, "#9c7c57", [0, 1.25, 0], [0.07, 2.5, 0.07]);
-  box(lantern, "#b79962", [0, 2.55, 0], [0.54, 0.12, 0.54]);
-  box(lantern, "#f6dd9a", [0, 2.29, 0], [0.33, 0.42, 0.33]);
-  const lanternLight = new THREE.PointLight("#ffdaa0", 1.2, 4);
-  lanternLight.position.y = 2.25;
-  lantern.add(lanternLight);
-  scene.add(lantern);
-  decorations.push(lantern);
-
-  const upgradeDecorations: World["upgradeDecorations"] = {
-    market: [],
-    workshop: [],
-    crew: [],
-  };
-  const createUpgrade = (
-    kind: keyof World["upgradeDecorations"],
+  function crate(
+    parent: THREE.Object3D,
     x: number,
     y: number,
     z: number,
-    parent: THREE.Object3D = scene,
-  ) => {
-    const group = new THREE.Group();
-    group.position.set(x, y, z);
-    group.visible = false;
-    parent.add(group);
-    upgradeDecorations[kind].push(group);
-    return group;
-  };
-  const goods = createUpgrade("market", -1.98, 0, -0.7, market);
-  crate(goods, 0, 0, 0.65);
-  crate(goods, 0.65, 0.1, 0.52);
-  for (let i = 0; i < 3; i++)
-    ball(
-      goods,
-      "#8eb6c8",
-      [i * 0.18 - 0.15, 0.77, 0.03],
-      [0.16, 0.07, 0.07],
-      true,
-    );
-  const cash = createUpgrade("market", 0.86, 1.4, 0.75, market);
-  for (let i = 0; i < 4; i++) {
-    box(
-      cash,
-      i % 2 ? "#94b485" : "#779d72",
-      [0, i * 0.055, 0],
-      [0.42, 0.05, 0.28],
-    );
-    box(cash, "#e5dfbc", [0, i * 0.055 + 0.03, 0], [0.055, 0.01, 0.29]);
-  }
-  for (let i = 0; i < 3; i++)
-    cylinder(
-      cash,
-      "#efcb72",
-      [-0.32, 0.04 + i * 0.045, 0.05],
-      [0.11, 0.04, 0.11],
-    );
-  const bunting = createUpgrade("market", 0, 2.77, 1.55, market);
-  box(bunting, "#edf0df", [0, 0, 0], [3.05, 0.025, 0.025]);
-  const bannerGeometry = new THREE.ShapeGeometry(
-    new THREE.Shape([
-      new THREE.Vector2(-0.12, 0),
-      new THREE.Vector2(0.12, 0),
-      new THREE.Vector2(0, -0.29),
-    ]),
-  );
-  for (let i = 0; i < 8; i++) {
-    const pennant = new THREE.Mesh(
-      bannerGeometry,
-      new THREE.MeshStandardMaterial({
-        color: i % 2 ? "#d9a466" : "#528ca5",
-        side: THREE.DoubleSide,
-      }),
-    );
-    pennant.position.set(-1.26 + i * 0.36, -0.02, 0);
-    bunting.add(pennant);
-  }
-  const timber = createUpgrade("workshop", 0.16, 0.67, -1.3);
-  for (let i = 0; i < 6; i++) {
-    const log = cylinder(
-      timber,
-      i % 2 ? "#a77e50" : "#bf9767",
-      [(i % 3) * 0.26, 0.13 + Math.floor(i / 3) * 0.25, 0],
-      [0.13, 1.05, 0.13],
-    );
-    log.rotation.x = Math.PI / 2;
-    const end = cylinder(
-      timber,
-      "#e0bd82",
-      [(i % 3) * 0.26, 0.13 + Math.floor(i / 3) * 0.25, 0.535],
-      [0.105, 0.02, 0.105],
-    );
-    end.rotation.x = Math.PI / 2;
-  }
-  const smoker = createUpgrade("workshop", 0.75, 0.76, -0.1);
-  box(smoker, "#526e7c", [0, 0.5, 0], [0.85, 1, 0.8]);
-  box(smoker, "#7f9aa5", [0, 1.04, 0], [0.96, 0.12, 0.92]);
-  box(smoker, "#3b4f59", [0, 0.5, 0.42], [0.62, 0.7, 0.035]);
-  box(smoker, "#c7b080", [0.18, 0.5, 0.45], [0.05, 0.18, 0.05]);
-  cylinder(smoker, "#91a5ae", [-0.2, 1.37, -0.2], [0.09, 0.6, 0.09]);
-  const fishRack = createUpgrade("workshop", 0.55, 0.67, -2.3);
-  for (const x of [-0.6, 0.6])
-    box(fishRack, "#9c7750", [x, 0.65, 0], [0.09, 1.3, 0.09]);
-  box(fishRack, "#b28a59", [0, 1.3, 0], [1.42, 0.1, 0.13]);
-  for (let i = 0; i < 4; i++) {
-    const hanging = ball(
-      fishRack,
-      i % 2 ? "#bf8e84" : "#9db8c6",
-      [-0.45 + i * 0.3, 0.78, 0],
-      [0.105, 0.4, 0.06],
-      true,
-    );
-    hanging.rotation.z = 0.1;
-  }
-  for (let i = 0; i < 3; i++) {
-    const shift = createUpgrade("crew", -2.25 + i * 2.8, 0.77, 3.5 - i * 0.38);
-    const worker = player.clone(true);
-    worker.position.set(0, 0, 0);
-    worker.scale.setScalar(0.92);
-    worker.rotation.y = -0.7 - i * 0.3;
-    shift.add(worker);
-    crate(shift, 0.65, 0.25, 0.52);
-    for (let j = 0; j < 2; j++)
-      box(shift, "#c9d9de", [0.65, 0.58 + j * 0.09, 0.25], [0.38, 0.08, 0.38]);
-    shift.userData.worker = true;
-  }
-  function lockedPad(
-    id: string,
-    name: string,
-    requiredLevel: number,
-    x: number,
-    z: number,
+    size = 0.7,
   ) {
-    const group = new THREE.Group();
-    group.position.set(x, 0.7, z);
-    group.userData.lockedRegion = id;
-    group.userData.regionId = id;
-    group.userData.kind = "region";
-    group.userData.openMap = true;
-    const glow = new THREE.Mesh(
-      new THREE.CircleGeometry(0.68, 40),
+    const g = group(parent, x, y, z);
+    box(g, "#9c7045", [0, size / 2, 0], [size, size, size]);
+    for (const yy of [0.09, size - 0.09]) {
+      box(g, "#ce9c65", [0, yy, size / 2 + 0.015], [size + 0.04, 0.09, 0.06]);
+      box(g, "#ce9c65", [size / 2 + 0.015, yy, 0], [0.06, 0.09, size + 0.04]);
+    }
+    box(g, "#d8ac72", [0, size / 2, size / 2 + 0.05], [0.065, size, 0.04]);
+    batchDetails(g);
+    return g;
+  }
+  function winterPerson(parent: THREE.Object3D, coat: string) {
+    const root = group(parent),
+      legs: THREE.Group[] = [];
+    const contact = new THREE.Mesh(
+      new THREE.CircleGeometry(0.38, 20),
       new THREE.MeshBasicMaterial({
-        color: "#e7c477",
+        color: "#173c51",
         transparent: true,
-        opacity: 0.2,
+        opacity: 0.14,
         depthWrite: false,
       }),
     );
-    glow.rotation.x = -Math.PI / 2;
-    glow.position.y = 0.025;
-    group.add(glow);
-    const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(0.67, 0.035, 5, 40),
-      mat("#ebc977"),
-    );
-    ring.rotation.x = Math.PI / 2;
-    ring.position.y = 0.04;
-    group.add(ring);
-    const coin = cylinder(group, "#e4bd62", [0, 0.23, 0], [0.18, 0.09, 0.18]);
-    coin.rotation.x = Math.PI / 2;
-    const badgeCanvas = document.createElement("canvas");
-    badgeCanvas.width = 512;
-    badgeCanvas.height = 128;
-    const context = badgeCanvas.getContext("2d")!;
-    context.fillStyle = "rgba(35,67,85,.91)";
-    context.beginPath();
-    context.roundRect(5, 8, 502, 108, 24);
-    context.fill();
-    context.textAlign = "center";
-    context.textBaseline = "middle";
-    context.fillStyle = "#fff3cd";
-    context.font = "bold 36px Georgia,serif";
-    context.fillText(name, 256, 47);
-    context.fillStyle = "#c8dce7";
-    context.font = "24px sans-serif";
-    context.fillText(`UNLOCK AT LEVEL ${requiredLevel}`, 256, 87);
-    const texture = new THREE.CanvasTexture(badgeCanvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    const badge = new THREE.Sprite(
-      new THREE.SpriteMaterial({ map: texture, depthTest: false }),
-    );
-    badge.scale.set(2.1, 0.525, 1);
-    badge.position.set(0, 1, 0);
-    badge.renderOrder = 5;
-    group.add(badge);
-    scene.add(group);
-    decorations.push(group);
+    contact.rotation.x = -Math.PI / 2;
+    contact.position.y = 0.012;
+    root.add(contact);
+    for (const x of [-0.15, 0.15]) {
+      const leg = group(root, x, 0.55, 0);
+      cylinder(leg, "#365365", [0, -0.23, 0], [0.115, 0.46, 0.115]);
+      ball(leg, "#344653", [0, -0.46, 0.075], [0.145, 0.09, 0.215]);
+      legs.push(leg);
+    }
+    cylinder(root, coat, [0, 0.88, 0], [0.3, 0.68, 0.255]);
+    ball(root, coat, [0, 1.19, 0], [0.3, 0.17, 0.255]);
+    box(root, "#dce6df", [0, 0.64, 0.03], [0.59, 0.07, 0.49]);
+    box(root, "#335c6d", [0, 0.89, 0.261], [0.025, 0.55, 0.02]);
+    const arms: THREE.Group[] = [];
+    for (const x of [-0.38, 0.38]) {
+      const arm = group(root, x, 1.15, 0);
+      cylinder(arm, coat, [0, -0.2, 0], [0.115, 0.4, 0.115]);
+      ball(arm, "#365464", [0, -0.46, 0.025], [0.12, 0.13, 0.115]);
+      arms.push(arm);
+    }
+    ball(root, "#e8c7ab", [0, 1.46, 0], [0.255, 0.275, 0.24]);
+    ball(root, "#745943", [0, 1.57, -0.08], [0.26, 0.2, 0.2]);
+    ball(root, "#e8c7ab", [0, 1.45, 0.045], [0.245, 0.24, 0.235]);
+    for (const x of [-0.085, 0.085])
+      ball(root, "#314452", [x, 1.49, 0.265], [0.027, 0.036, 0.014]);
+    cylinder(root, "#f1f1df", [0, 1.7, 0], [0.285, 0.22, 0.27]);
+    cylinder(root, "#d7e1de", [0, 1.6, 0], [0.297, 0.075, 0.28]);
+    ball(root, "#fbf9e9", [0, 1.86, 0], [0.09, 0.09, 0.09]);
+    box(root, "#efaa75", [0, 1.24, 0.04], [0.53, 0.1, 0.44]);
+    batchDetails(root);
+    return { root, legs, leftArm: arms[0], rightArm: arms[1] };
   }
-  lockedPad("pinewood", "Pinewood Coast", 3, 3.1, -3.5);
-  lockedPad("salmonrun", "Salmon Run", 6, -0.7, 5.85);
-  lockedPad("frostlake", "Frost Lake", 10, -3.35, -4.2);
-  lockedPad("moonlit", "Moonlight Bay", 16, 5.8, 5.1);
-  lockedPad("glacier", "Glacier Reach", 24, 7.5, -1.3);
+  const person = winterPerson(scene, teal),
+    player = person.root;
+  player.position.set(0, 0.4, 4);
+  const { rightArm, leftArm, legs } = person;
+  const cargo = group(player, 0, 0.95, -0.38);
+  const axe = group(rightArm, 0, -0.47, 0.04);
+  axe.visible = false;
+  cylinder(axe, "#a87640", [0, -0.03, 0], [0.04, 0.75, 0.04]);
+  const axeHead = box(axe, "#c9dee8", [0.15, 0.27, 0], [0.43, 0.28, 0.1]);
+  axeHead.rotation.z = -0.16;
+  box(axe, "#f0f6f7", [0.36, 0.24, 0], [0.035, 0.29, 0.115]);
+  const rod = group(rightArm, 0, -0.43, 0.04);
+  rod.visible = false;
+  const rodShaft = cylinder(
+    rod,
+    "#365e7d",
+    [0, 0.52, 0.15],
+    [0.024, 1.65, 0.024],
+  );
+  rodShaft.rotation.x = 0.5;
+  cylinder(rod, "#c39662", [0, -0.15, -0.15], [0.055, 0.4, 0.055]).rotation.x =
+    0.5;
+  const reel = cylinder(
+    rod,
+    "#cedce2",
+    [0.08, -0.08, -0.12],
+    [0.1, 0.09, 0.1],
+    0.3,
+  );
+  reel.rotation.z = Math.PI / 2;
+  const fishingLine = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(),
+      new THREE.Vector3(),
+    ]),
+    new THREE.LineBasicMaterial({
+      color: "#eef8ff",
+      transparent: true,
+      opacity: 0.8,
+    }),
+  );
+  fishingLine.visible = false;
+  scene.add(fishingLine);
+  const bobber = ball(scene, "#eb8b60", [-9, -0.15, 1], [0.09, 0.14, 0.09]);
+  bobber.visible = false;
+  const trees: TreeNode[] = [];
+  function tree(x: number, z: number, size = 1) {
+    const root = group(scene, x, 0.35, z),
+      pivot = group(root);
+    root.scale.setScalar(size);
+    const trunk = cylinder(pivot, "#a36b3f", [0, 1, 0], [0.24, 2, 0.24]);
+    for (let i = 0; i < 3; i++) {
+      shape(
+        pivot,
+        cone,
+        "#638494",
+        [0, 1.55 + i * 0.78, 0],
+        [1.32 - i * 0.27, 1.8, 1.22 - i * 0.24],
+      );
+      shape(
+        pivot,
+        cone,
+        i === 2 ? "#f5f9fa" : "#d9e9f1",
+        [0, 1.78 + i * 0.78, 0],
+        [1.19 - i * 0.246, 1.57, 1.1 - i * 0.22],
+      );
+    }
+    batchDetails(pivot);
+    const notch = box(pivot, "#d99445", [0, 0.66, 0.235], [0.39, 0.18, 0.07]);
+    notch.visible = false;
+    const stump = group(root);
+    cylinder(stump, "#986237", [0, 0.2, 0], [0.25, 0.4, 0.25]);
+    cylinder(stump, "#dcb17a", [0, 0.412, 0], [0.235, 0.025, 0.235]);
+    stump.visible = false;
+    root.userData.kind = "tree";
+    const node: TreeNode = {
+      group: root,
+      pivot,
+      trunk,
+      notch,
+      stump,
+      position: root.position.clone(),
+      state: "standing",
+      regrowAt: 0,
+      originalScale: size,
+    };
+    trees.push(node);
+    return node;
+  }
+  [
+    [-3.1, -4.9, 1],
+    [-3.2, -6.5, 0.93],
+    [-5.8, -8, 0.95],
+    [-1.3, -8.7, 1.12],
+    [-4.1, -10.5, 1.15],
+    [1, -10.1, 0.93],
+    [3.6, -9.5, 1.08],
+    [6.2, -8.3, 0.95],
+    [8, -6.2, 0.96],
+    [8.6, -10.4, 1.12],
+    [-6.2, -11, 1],
+    [4.2, -11.5, 0.95],
+    [0.5, -6.5, 0.83],
+  ].forEach(([x, z, s]) => tree(x, z, s));
+  // Distant snow forest uses three instanced layers, rather than hundreds of meshes.
+  const distantCount = 62,
+    farTrunks = new THREE.InstancedMesh(cyl, material("#7d654e"), distantCount),
+    farLeaves = new THREE.InstancedMesh(
+      cone,
+      material("#698898"),
+      distantCount * 3,
+    ),
+    farSnow = new THREE.InstancedMesh(
+      cone,
+      material("#dfeef5"),
+      distantCount * 3,
+    );
+  for (let i = 0; i < distantCount; i++) {
+    const x = i < 40 ? -15 - random() * 10 : -6 + random() * 18,
+      z = i < 40 ? -20 + random() * 42 : -15 - random() * 14,
+      s = 0.8 + random() * 0.65;
+    dummy.position.set(x, 1.1, z);
+    dummy.scale.set(0.2 * s, 1.5 * s, 0.2 * s);
+    dummy.rotation.set(0, 0, 0);
+    dummy.updateMatrix();
+    farTrunks.setMatrixAt(i, dummy.matrix);
+    for (let j = 0; j < 3; j++) {
+      dummy.position.set(x, 0.35 + (1.5 + j * 0.7) * s, z);
+      dummy.scale.set((1.3 - j * 0.27) * s, 1.8 * s, (1.22 - j * 0.24) * s);
+      dummy.updateMatrix();
+      farLeaves.setMatrixAt(i * 3 + j, dummy.matrix);
+      dummy.position.y += 0.23 * s;
+      dummy.scale.set((1.17 - j * 0.245) * s, 1.57 * s, (1.1 - j * 0.22) * s);
+      dummy.updateMatrix();
+      farSnow.setMatrixAt(i * 3 + j, dummy.matrix);
+    }
+  }
+  farTrunks.castShadow = farLeaves.castShadow = farSnow.castShadow = true;
+  scene.add(farTrunks, farLeaves, farSnow);
+  const fish: THREE.Group[] = [];
+  for (let i = 0; i < 4; i++) {
+    const tuna = fishTemplate.clone(true);
+    tuna.scale.setScalar(1.52 + (i % 2) * 0.16);
+    tuna.position.set(-10, 0.01, -10 + i * 7.7);
+    tuna.userData.basePosition = tuna.position.clone();
+    fish.push(tuna);
+    scene.add(tuna);
+  }
 
-  function dispose() {
-    const geometries = new Set<THREE.BufferGeometry>();
-    const materials = new Set<THREE.Material>();
-    const textures = new Set<THREE.Texture>();
-    scene.traverse((object) => {
-      const objectMesh = object as THREE.Mesh;
-      if (objectMesh.geometry) geometries.add(objectMesh.geometry);
-      const array = objectMesh.material
-        ? Array.isArray(objectMesh.material)
-          ? objectMesh.material
-          : [objectMesh.material]
-        : [];
-      for (const material of array) {
-        materials.add(material);
-        for (const value of Object.values(material))
-          if (value instanceof THREE.Texture) textures.add(value);
+  const station = (x: number, z: number, wx: number, wz: number): Station => {
+    const root = group(scene, x, groundHeight(x, z), z);
+    return {
+      group: root,
+      position: new THREE.Vector3(x, groundHeight(x, z), z),
+      workPosition: new THREE.Vector3(wx, groundHeight(wx, wz), wz),
+    };
+  };
+  const stations: World["stations"] = {
+    fish: station(-6.2, 1, -5.95, 1.1),
+    steaks: station(-2, 0, -2, 1.5),
+    planks: station(3, -4, 3, -2.35),
+    smoked: station(5, 1, 5, 2.5),
+    market: station(4, 5, 4, 3.8),
+  };
+  // Short dock is directly connected to the yard. Upgrades extend it over the fish.
+  for (let i = 0; i < 8; i++)
+    box(
+      stations.fish.group,
+      i % 2 ? "#c58a50" : "#d29a60",
+      [-0.12 + i * 0.18, -0.09, 0],
+      [0.17, 0.18, 1.65],
+    );
+  for (const z of [-0.7, 0.7]) {
+    cylinder(
+      stations.fish.group,
+      "#9b6b41",
+      [-0.12, -0.2, z],
+      [0.1, 0.85, 0.1],
+    );
+    cylinder(
+      stations.fish.group,
+      "#d9b88a",
+      [-0.12, 0.27, z],
+      [0.12, 0.1, 0.12],
+    );
+  }
+  // The cutting table works at level zero: whole fish, cleaver, and individual steaks.
+  const bench = stations.steaks.group;
+  for (const x of [-0.9, 0.9])
+    for (const z of [-0.45, 0.45])
+      box(bench, darkWood, [x, 0.38, z], [0.13, 0.76, 0.13]);
+  box(bench, "#b58250", [0, 0.8, 0], [2.25, 0.2, 1.4]);
+  box(bench, "#e3c694", [0, 0.925, 0], [1.92, 0.06, 1.16]);
+  box(bench, "#b28454", [1.65, 1.01, 0], [1.6, 0.13, 0.58]);
+  for (const z of [-0.3, 0.3])
+    box(bench, "#d4aa72", [1.65, 1.13, z], [1.66, 0.11, 0.06]);
+  const cutterFish = createItem("fish");
+  cutterFish.scale.setScalar(1.65);
+  cutterFish.position.set(0, 1.15, 0);
+  bench.add(cutterFish);
+  const cleaver = group(bench, 0, 1.8, 0.05);
+  box(cleaver, "#bd8b54", [0, 0.12, 0], [0.11, 0.42, 0.1]);
+  box(cleaver, "#d5e2e7", [0.19, -0.15, 0], [0.46, 0.34, 0.065]);
+  box(cleaver, "#f4faf8", [0.19, -0.325, 0], [0.46, 0.025, 0.075]);
+  function sawBlade(
+    parent: THREE.Object3D,
+    x: number,
+    y: number,
+    z: number,
+    r = 0.63,
+  ) {
+    const g = group(parent, x, y, z);
+    const disc = cylinder(g, "#d9e4e8", [0, 0, 0], [r, 0.075, r], 0.35);
+    disc.rotation.x = Math.PI / 2;
+    for (let i = 0; i < 14; i++) {
+      const a = (i / 14) * Math.PI * 2;
+      const tooth = box(
+        g,
+        "#9ab3c1",
+        [Math.sin(a) * r, Math.cos(a) * r, 0],
+        [0.13, 0.15, 0.09],
+      );
+      tooth.rotation.z = -a;
+    }
+    const hub = cylinder(g, yellow, [0, 0, 0.07], [0.15, 0.12, 0.15]);
+    hub.rotation.x = Math.PI / 2;
+    batchDetails(g);
+    return g;
+  }
+  const blade = sawBlade(bench, 0, 1.5, -0.32);
+  blade.visible = false;
+  const secondBlade = sawBlade(bench, 0.78, 1.5, -0.32);
+  secondBlade.visible = false;
+  const piston = group(bench, -1.15, 1.15, -0.4);
+  piston.visible = false;
+  cylinder(piston, silver, [0, 0.3, 0], [0.08, 0.6, 0.08], 0.3);
+  box(piston, yellow, [0, 0.65, 0], [0.29, 0.25, 0.3]);
+  const conveyor = group(bench, 1.8, 0.76, 0);
+  conveyor.visible = false;
+  box(conveyor, "#4c6a79", [0, 0, 0], [1.35, 0.16, 1.1]);
+  for (let i = 0; i < 7; i++)
+    box(conveyor, "#76909b", [-0.55 + i * 0.18, 0.1, 0], [0.1, 0.055, 1.06]);
+  const steaks: THREE.Group[] = [];
+  for (let i = 0; i < 4; i++) {
+    const item = createItem("steak");
+    item.position.set(0.75 + i * 0.34, 1.08, 0.3);
+    item.visible = false;
+    bench.add(item);
+    steaks.push(item);
+  }
+  crate(bench, 2.3, 0, 0.4, 0.8);
+  const cutter = {
+    cleaver,
+    blade,
+    secondBlade,
+    piston,
+    conveyor,
+    fish: cutterFish,
+    steaks,
+  };
+  // Sawmill and smoker begin as honest, unbuilt foundations.
+  box(stations.planks.group, "#d5e0e4", [0, 0.025, 0], [2.6, 0.05, 1.9]);
+  box(stations.smoked.group, "#ccd9de", [0, 0.025, 0], [1.9, 0.05, 1.8]);
+  // A low market counter faces a real queue, and remains reachable from the yard.
+  const market = stations.market.group;
+  box(market, "#956842", [0, 0.47, 0], [3.4, 0.94, 0.95]);
+  box(market, "#d7a269", [0, 0.98, 0], [3.65, 0.13, 1.2]);
+  for (let i = 0; i < 9; i++)
+    box(
+      market,
+      i % 2 ? "#ba8957" : "#c89660",
+      [-1.45 + i * 0.36, 0.5, 0.495],
+      [0.34, 0.83, 0.045],
+    );
+  const marketGoods = group(market, 0, 1.1, 0);
+  for (let i = 0; i < 3; i++) {
+    const item = createItem("fish");
+    item.position.set(-1 + i, 0.05, 0);
+    marketGoods.add(item);
+  }
+  const customers: THREE.Group[] = [];
+  for (let i = 0; i < 5; i++) {
+    const customer = winterPerson(scene, i % 2 ? "#e2c15b" : "#f0cf69").root;
+    customer.position.set(4 + (i % 2) * 0.25, 0.35, 6.6 + i * 1.35);
+    customer.rotation.y = Math.PI;
+    customer.userData.basePosition = customer.position.clone();
+    customers.push(customer);
+  }
+  for (const x of [2.05, 5.95]) {
+    for (let i = 0; i < 7; i++) {
+      cylinder(
+        scene,
+        "#a67c51",
+        [x, 0.63, 6.5 + i * 0.9],
+        [0.045, 0.55, 0.045],
+      );
+      ball(scene, "#eef5f7", [x, 0.92, 6.5 + i * 0.9], [0.09, 0.07, 0.09]);
+    }
+    box(scene, "#bd986c", [x, 0.66, 9.1], [0.05, 0.06, 5.8]);
+  }
+  // A footbridge reaches the opposite forestbank; its deck is physically walkable.
+  const bridge = group(scene, -10, 0.32, -8.5);
+  for (let i = 0; i < 23; i++) {
+    const x = -3 + i * 0.27,
+      arch = Math.sin((i / 22) * Math.PI) * 0.5;
+    box(bridge, i % 2 ? "#b97d46" : "#cb9558", [x, arch, 0], [0.25, 0.14, 1.7]);
+  }
+  for (const z of [-0.83, 0.83])
+    for (let i = 0; i < 7; i++) {
+      const x = -3 + i;
+      cylinder(
+        bridge,
+        "#9d6d42",
+        [x, 0.5 + Math.sin((i / 6) * Math.PI) * 0.5, z],
+        [0.09, 1, 0.09],
+      );
+      ball(
+        bridge,
+        "#e7dfca",
+        [x, 1.03 + Math.sin((i / 6) * Math.PI) * 0.5, z],
+        [0.115, 0.065, 0.115],
+      );
+    }
+  // Every equipment level has a retained, independently visible world component.
+  const keys: UpgradeId[] = [
+    "axe",
+    "rod",
+    "backpack",
+    "cutter",
+    "sawmill",
+    "market",
+    "dock",
+    "crew",
+    "smokehouse",
+    "freezer",
+    "boots",
+    "nets",
+  ];
+  const upgradeGroups = Object.fromEntries(
+    keys.map((key) => [key, []]),
+  ) as unknown as Record<UpgradeId, THREE.Group[]>;
+  const smokePuffs: THREE.Mesh[] = [];
+  const stage = (
+    id: UpgradeId,
+    parent: THREE.Object3D,
+    x = 0,
+    y = 0,
+    z = 0,
+  ) => {
+    const g = group(parent, x, y, z);
+    g.visible = false;
+    g.userData.upgrade = id;
+    g.userData.stage = upgradeGroups[id].length + 1;
+    upgradeGroups[id].push(g);
+    return g;
+  };
+  for (let level = 1; level <= 5; level++) {
+    const axeStage = stage("axe", axe);
+    const stripe = box(
+      axeStage,
+      ["#d6ab55", "#8caec2", "#e8c063", "#85bec9", "#d8e9ed"][level - 1],
+      [0, -0.2 + level * 0.085, 0],
+      [0.095, 0.055, 0.095],
+    );
+    stripe.rotation.y = level * 0.2;
+    const rodStage = stage("rod", rod);
+    const guide = cylinder(
+      rodStage,
+      level > 3 ? "#e7c969" : "#c3d8e2",
+      [0, 0.15 + level * 0.2, 0.02],
+      [0.045, 0.05, 0.045],
+      0.3,
+    );
+    guide.rotation.x = 0.5;
+    const pack = stage("backpack", player, 0, 0.77, -0.36);
+    box(
+      pack,
+      level % 2 ? "#ae7b48" : "#bf945c",
+      [0, level * 0.11, 0],
+      [0.55 + level * 0.055, 0.095, 0.3 + level * 0.028],
+    );
+    box(
+      pack,
+      "#e6bf7c",
+      [0, level * 0.11, 0.17 + level * 0.014],
+      [0.07, 0.1, 0.025],
+    );
+    const cut = stage("cutter", bench);
+    if (level === 1) {
+      for (const x of [-1.15, 1.1])
+        box(cut, yellow, [x, 1.27, -0.4], [0.16, 1.1, 0.21]);
+      box(cut, yellow, [0, 1.86, -0.4], [2.45, 0.18, 0.24]);
+      box(cut, "#426777", [-1.23, 0.96, -0.4], [0.45, 0.5, 0.44]);
+    } else if (level === 2) {
+      box(cut, yellow, [0.9, 1.99, -0.4], [1.05, 0.17, 0.24]);
+      box(cut, "#4c6c7c", [0.9, 1.15, -0.58], [0.48, 0.46, 0.25]);
+    } else {
+      box(cut, yellow, [-1.23, 0.6 + level * 0.21, -0.4], [0.24, 0.12, 0.37]);
+      cylinder(
+        cut,
+        "#c4d7df",
+        [1.15, 0.72 + level * 0.14, -0.4],
+        [0.09, 0.06, 0.09],
+        0.4,
+      ).rotation.x = Math.PI / 2;
+    }
+    const mill = stage("sawmill", stations.planks.group);
+    if (level === 1) {
+      box(mill, "#6c8996", [0, 0.51, 0], [2.15, 0.95, 1.2]);
+      box(mill, "#d3a366", [0, 1.03, 0], [2.45, 0.13, 1.35]);
+      const millBlade = sawBlade(mill, 0, 1.12, -0.03, 0.49);
+      millBlade.name = "sawmill-blade";
+      millBlade.userData.spinAxis = "z";
+      millBlade.userData.spinSpeed = 8;
+      box(mill, yellow, [-0.85, 0.9, -0.15], [0.28, 0.55, 0.28]);
+    } else {
+      const log = createItem("wood");
+      log.position.set(-0.75 + (level - 2) * 0.38, 1.18, 0.35);
+      mill.add(log);
+      box(
+        mill,
+        yellow,
+        [-1.07, 0.35 + level * 0.18, -0.42],
+        [0.13, 0.11, 0.31],
+      );
+    }
+    const shop = stage("market", market);
+    if (level === 1) {
+      for (const x of [-1.7, 1.7])
+        box(shop, timber, [x, 1.55, -0.47], [0.09, 2.9, 0.09]);
+      box(shop, "#e7cf9d", [0, 2.88, -0.47], [3.6, 0.14, 0.18]);
+    } else if (level === 2) {
+      for (let i = 0; i < 10; i++) {
+        const canopy = box(
+          shop,
+          i % 2 ? "#e8ede4" : "#4e97b2",
+          [-1.62 + i * 0.36, 2.75, 0.1],
+          [0.36, 0.1, 1.65],
+        );
+        canopy.rotation.x = 0.12;
       }
+    } else if (level === 3) {
+      box(shop, "#6f8795", [0, 3, -0.05], [3.85, 0.15, 1.85]);
+      box(shop, "#ecf4f5", [0, 3.11, -0.05], [3.95, 0.1, 1.95]);
+    } else if (level === 4) {
+      box(shop, "#ba8957", [2.5, 0.48, 0], [1.45, 0.94, 0.95]);
+      box(shop, "#d6a168", [2.5, 0.99, 0], [1.6, 0.12, 1.2]);
+    } else {
+      crate(shop, -2.35, 0, 0, 0.75);
+      for (let i = 0; i < 4; i++)
+        box(shop, "#6ba27a", [1.1, 1.15 + i * 0.06, 0.13], [0.42, 0.045, 0.26]);
+    }
+    const dockStage = stage("dock", stations.fish.group);
+    for (let i = 0; i < 3; i++)
+      box(
+        dockStage,
+        i % 2 ? "#c98e51" : "#ddaa6d",
+        [-0.4 - (level - 1) * 0.43 - i * 0.14, -0.09, 0],
+        [0.13, 0.18, 1.65 + level * 0.12],
+      );
+    for (const z of [-0.8 - level * 0.06, 0.8 + level * 0.06])
+      cylinder(
+        dockStage,
+        "#ae7846",
+        [-0.55 - (level - 1) * 0.43, -0.2, z],
+        [0.08, 0.85, 0.08],
+      );
+    const workerStage = stage(
+      "crew",
+      scene,
+      -4 + (level - 1) * 1.3,
+      0.4,
+      3.8 + (level % 2) * 0.8,
+    );
+    const helper = winterPerson(workerStage, level % 2 ? "#23a0b4" : "#418fa7"),
+      worker = helper.root;
+    worker.rotation.y = -0.7;
+    worker.userData.workerPerson = true;
+    worker.userData.arms = [helper.leftArm, helper.rightArm];
+    worker.userData.legs = helper.legs;
+    worker.traverse((object) => {
+      object.castShadow = false;
     });
-    geometries.forEach((geometry) => geometry.dispose());
-    materials.forEach((material) => material.dispose());
-    textures.forEach((texture) => texture.dispose());
+    const carrying = createItem(level % 2 ? "wood" : "fish");
+    carrying.position.set(0, 1, -0.35);
+    carrying.scale.setScalar(0.7);
+    worker.add(carrying);
+    worker.userData.carrying = carrying;
+    workerStage.userData.worker = true;
+    workerStage.userData.basePosition = workerStage.position.clone();
+    crate(workerStage, 0.65, 0, 0.2, 0.45);
+    const smoker = stage("smokehouse", stations.smoked.group);
+    if (level === 1) {
+      box(smoker, "#6e7f89", [0, 0.75, 0], [1.5, 1.5, 1.25]);
+      box(smoker, "#47616e", [0, 0.75, 0.65], [1.12, 1.2, 0.06]);
+      box(smoker, "#d3b577", [0.35, 0.75, 0.71], [0.06, 0.25, 0.07]);
+      box(smoker, "#c7d8df", [0, 1.56, 0], [1.68, 0.12, 1.43]);
+      cylinder(smoker, "#879da8", [-0.4, 1.95, -0.3], [0.1, 0.8, 0.1]);
+    } else {
+      const piece = createItem("smoked");
+      piece.position.set(-0.5 + (level - 2) * 0.34, 1.72, 0.08);
+      piece.rotation.y = Math.PI / 2;
+      smoker.add(piece);
+      box(smoker, yellow, [-0.75, 0.2 + level * 0.18, 0], [0.045, 0.09, 0.22]);
+    }
+    const cold = stage("freezer", scene, 7, 0.35, -1);
+    if (level === 1) {
+      crate(cold, 0, 0, 0, 0.85);
+      box(cold, "#cae7ed", [0, 0.9, 0], [0.8, 0.2, 0.78]);
+    } else if (level === 2) {
+      box(cold, "#9fb7c5", [0, 0.8, 0], [1.2, 1.6, 1.2]);
+      box(cold, "#d2e4eb", [0, 1.66, 0], [1.3, 0.13, 1.3]);
+    } else if (level === 3) {
+      box(cold, "#7e9bac", [0, 1.05, -0.04], [1.7, 2.1, 1.7]);
+      box(cold, "#e9f3f6", [0, 2.18, -0.04], [1.85, 0.15, 1.85]);
+      box(cold, "#d0e0e8", [0, 1.04, 0.84], [1.4, 1.8, 0.05]);
+    } else {
+      box(
+        cold,
+        "#7bc2d5",
+        [-0.6 + (level - 4) * 0.5, 1.1, 0.89],
+        [0.26, 0.36, 0.04],
+      );
+      box(
+        cold,
+        "#e9f5f6",
+        [-0.6 + (level - 4) * 0.5, 1.1, 0.92],
+        [0.04, 0.24, 0.035],
+      );
+    }
+    const boot = stage("boots", player);
+    for (const x of [-0.15, 0.15])
+      box(
+        boot,
+        ["#d8ac62", "#7da4b7", "#e4c67b", "#b3d5de", "#ebd693"][level - 1],
+        [x, 0.025 + level * 0.018, 0.09],
+        [0.3, 0.025, 0.35],
+      );
+    const net = stage("nets", scene, -6.65, 0.4, -1.35 - (level - 1) * 0.18);
+    cylinder(net, "#c2935c", [0, 0.55, 0], [0.045, 1.1, 0.045]);
+    const frame = new THREE.Mesh(
+      new THREE.TorusGeometry(0.42, 0.025, 5, 20),
+      material("#c5a26c"),
+    );
+    frame.position.set(-0.3, 0.9, 0);
+    frame.rotation.y = -0.6;
+    net.add(frame);
+    for (let j = -2; j <= 2; j++)
+      box(
+        net,
+        "#b5d1cf",
+        [-0.3 + j * 0.12, 0.9, 0],
+        [0.012, 0.7 - Math.abs(j) * 0.08, 0.012],
+      );
+  }
+  for (let i = 0; i < 5; i++) {
+    const puff = ball(
+      scene,
+      "#dde7ea",
+      [4.6, 2.8 + i * 0.24, 0.7],
+      [0.15 + i * 0.035, 0.15 + i * 0.035, 0.15 + i * 0.035],
+    );
+    puff.visible = false;
+    puff.castShadow = false;
+    const puffMat = new THREE.MeshStandardMaterial({
+      color: "#e8edf0",
+      transparent: true,
+      opacity: 0.4,
+      depthWrite: false,
+    });
+    puff.material = puffMat;
+    smokePuffs.push(puff);
+  }
+
+  for (const id of keys) upgradeGroups[id].forEach((g) => batchDetails(g));
+  batchDetails(market);
+  function applyUpgrades(levels: GameState["upgrades"]) {
+    const changed: THREE.Group[] = [];
+    for (const id of keys) {
+      const level = levels[id] || 0;
+      upgradeGroups[id].forEach((g, index) => {
+        const wanted = index < level;
+        if (wanted && !g.visible) changed.push(g);
+        g.visible = wanted;
+      });
+    }
+    dockLevel = levels.dock || 0;
+    const cutterLevel = levels.cutter || 0;
+    blade.visible = cutterLevel >= 1;
+    secondBlade.visible = cutterLevel >= 2;
+    piston.visible = cutterLevel >= 1;
+    conveyor.visible = cutterLevel >= 1;
+    cleaver.visible = cutterLevel === 0;
+    blade.scale.setScalar(1 + Math.max(0, cutterLevel - 2) * 0.06);
+    secondBlade.scale.copy(blade.scale);
+    axeHead.scale.x = 0.43 * (1 + (levels.axe || 0) * 0.09);
+    axeHead.material = material(
+      (levels.axe || 0) > 3 ? "#e1c372" : "#c9dee8",
+      0.25,
+    );
+    rodShaft.scale.y = 1.65 * (1 + (levels.rod || 0) * 0.07);
+    smokePuffs.forEach((puff) => {
+      puff.visible = (levels.smokehouse || 0) > 0;
+    });
+    return changed;
+  }
+  const obstacles = [
+    { x: -2, z: 0, w: 2.5, d: 1.5 },
+    { x: 3, z: -4, w: 2.65, d: 1.9 },
+    { x: 5, z: 1, w: 1.9, d: 1.7 },
+    { x: 4, z: 5, w: 3.8, d: 1.3 },
+    { x: 7, z: -1, w: 1.85, d: 1.85 },
+  ];
+  const isWalkable = (x: number, z: number) => {
+    if ((x < -7.05 && !onDock(x, z)) || x > 9 || z < -12 || z > 12)
+      return false;
+    if (
+      obstacles.some(
+        (o) =>
+          Math.abs(x - o.x) < o.w / 2 + 0.12 &&
+          Math.abs(z - o.z) < o.d / 2 + 0.12,
+      )
+    )
+      return false;
+    // Timber fence openings and the wide front entrance are real passageways.
+    if (
+      Math.abs(x + 5.55) < 0.16 &&
+      z > -3.3 &&
+      z < 8.7 &&
+      (z < 0.02 || z > 2.2)
+    )
+      return false;
+    if (
+      Math.abs(x - 7.65) < 0.16 &&
+      z > -3.3 &&
+      z < 8.7 &&
+      (z < 3.9 || z > 6.8)
+    )
+      return false;
+    if (
+      Math.abs(z + 3.28) < 0.16 &&
+      x > -5.5 &&
+      x < 7.65 &&
+      (x < -3.8 || (x > 0.9 && x < 1.5) || x > 4.5)
+    )
+      return false;
+    if (
+      Math.abs(z - 8.72) < 0.16 &&
+      x > -5.5 &&
+      x < 7.65 &&
+      (x < -2.9 || x > 4.9)
+    )
+      return false;
+    return true;
+  };
+  // Fine, instanced snow detail stays outside paths and never floats over water.
+  const pebbles = new THREE.InstancedMesh(
+      new THREE.IcosahedronGeometry(0.16, 0),
+      material("#c5d9e4"),
+      100,
+    ),
+    snowDots = new THREE.InstancedMesh(sphere, material("#f9fcfd"), 90);
+  for (let i = 0; i < 100; i++) {
+    let x = -6.7 + random() * 16,
+      z = -13 + random() * 28;
+    if (x > -5.7 && x < 8 && z > -3.6 && z < 9) {
+      x = 8.3 + random() * 3;
+      z -= 6;
+    }
+    dummy.position.set(x, 0.36, z);
+    dummy.rotation.set(random(), random() * 6, random());
+    dummy.scale.set(1 + random(), 0.3 + random() * 0.4, 0.6 + random());
+    dummy.updateMatrix();
+    pebbles.setMatrixAt(i, dummy.matrix);
+    if (i < 90) {
+      dummy.position.y = 0.35;
+      dummy.scale.set(0.12 + random() * 0.12, 0.025, 0.12 + random() * 0.15);
+      dummy.updateMatrix();
+      snowDots.setMatrixAt(i, dummy.matrix);
+    }
+  }
+  scene.add(pebbles, snowDots);
+  const ripples = new THREE.InstancedMesh(
+    new THREE.PlaneGeometry(0.025, 0.7),
+    new THREE.MeshBasicMaterial({
+      color: "#8adaed",
+      transparent: true,
+      opacity: 0.32,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+    70,
+  );
+  for (let i = 0; i < 70; i++) {
+    dummy.position.set(-12.5 + random() * 5, -0.235, -26 + random() * 60);
+    dummy.rotation.set(-Math.PI / 2, 0, 0);
+    dummy.scale.setScalar(0.5 + random());
+    dummy.updateMatrix();
+    ripples.setMatrixAt(i, dummy.matrix);
+  }
+  scene.add(ripples);
+  function dispose() {
+    const geometries = new Set<THREE.BufferGeometry>(unusedGeometries),
+      materials = new Set<THREE.Material>(),
+      textures = new Set<THREE.Texture>();
+    scene.traverse((o) => {
+      const object = o as THREE.Mesh;
+      if (object.geometry) geometries.add(object.geometry);
+      const items = object.material
+        ? Array.isArray(object.material)
+          ? object.material
+          : [object.material]
+        : [];
+      items.forEach((m) => {
+        materials.add(m);
+        Object.values(m).forEach((v) => {
+          if (v instanceof THREE.Texture) textures.add(v);
+        });
+      });
+    });
+    for (const template of [
+      fishTemplate,
+      smokedTemplate,
+      ...itemTemplates.values(),
+    ])
+      template.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.geometry) geometries.add(m.geometry);
+        if (m.material)
+          for (const mat of Array.isArray(m.material)
+            ? m.material
+            : [m.material])
+            materials.add(mat);
+      });
+    geometries.forEach((g) => g.dispose());
+    materials.forEach((m) => m.dispose());
+    textures.forEach((t) => t.dispose());
     sun.shadow.map?.dispose();
+    itemTemplates.clear();
   }
   return {
     scene,
-    terrain,
-    nodes,
-    market,
-    cottage,
-    boat,
-    water,
-    sparkles,
-    birds,
-    clouds,
     player,
-    limbs,
-    decorations,
-    fishes,
+    rightArm,
+    leftArm,
+    legs,
+    cargo,
+    axe,
+    rod,
+    bobber,
+    fishingLine,
+    trees,
+    fish,
     customers,
-    obstacles,
+    stations,
+    cutter,
+    upgradeGroups,
+    smokePuffs,
+    water,
     isWalkable,
-    upgradeDecorations,
+    groundHeight,
+    applyUpgrades,
+    createItem,
     dispose,
   };
 }
