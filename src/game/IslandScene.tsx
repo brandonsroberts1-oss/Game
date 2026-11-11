@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { createWorld, type TreeNode } from "./world";
+import { createHarborNPCs } from "./npc";
 import {
   capacity,
   inventoryCount,
@@ -14,17 +15,32 @@ import {
   type UpgradeId,
   type Resource,
   type RecipeId,
+  type WorkerRole,
+  stockCount,
+  stockCapacity,
+  RECIPES,
+  resourceNames,
+  UPGRADES,
 } from "./model";
 
 interface SceneProps {
   game: GameState;
   paused: boolean;
-  command: { id: number; target: ActivityId } | null;
+  command: {
+    id: number;
+    target: ActivityId;
+    transfer?: "collect" | "deposit";
+  } | null;
   joystick: { x: number; y: number };
   interactToken: number;
   onHarvest: (resource: Resource) => number;
   onProcess: (recipe: RecipeId) => boolean;
   onSell: () => number;
+  onWorkerStart: (role: WorkerRole) => boolean;
+  onWorkerComplete: (role: WorkerRole) => boolean;
+  onSellStock: (resource: Resource, quantity: number) => number;
+  onCollectStock: () => number;
+  onDepositStock: () => number;
   onReady: () => void;
   onActivity: (info: {
     id: ActivityId | null;
@@ -41,6 +57,7 @@ type Destination = {
   position: THREE.Vector3;
   tree?: TreeNode;
   route: THREE.Vector3[];
+  transfer?: "collect" | "deposit";
 };
 type Work = {
   id: ActivityId;
@@ -54,6 +71,8 @@ type Work = {
   cuts: number;
   amount: number;
   committed: boolean;
+  transfer?: "collect" | "deposit";
+  contents?: Partial<Record<Resource, number>>;
 };
 type Particle = {
   object: THREE.Object3D;
@@ -73,6 +92,13 @@ const LABELS: Record<ActivityId, string> = {
   planks: "Saw planks",
   smoked: "Smoke fish",
   market: "Sell your cargo",
+  crab: "Lift crab pots",
+  kelp: "Gather kelp",
+  ore: "Mine ore",
+  ingots: "Forge metal",
+  meals: "Cook seafood",
+  tackle: "Make fishing tackle",
+  warehouse: "Visit the warehouse",
 };
 const PHASE_LABELS: Record<string, string> = {
   "tree-swing": "Swinging the axe",
@@ -94,6 +120,16 @@ const PHASE_LABELS: Record<string, string> = {
   "sale-goods": "Unloading your cargo",
   "sale-customer": "Serving customers",
   "sale-cash": "Collecting cash",
+  "pot-lower": "Lowering the crab basket",
+  "pot-haul": "Hauling a full crab pot",
+  "gather-pickup": "Packing your harvest",
+  "kelp-cut": "Cutting fresh kelp",
+  "ore-strike": "Breaking the ore seam",
+  "forge-work": "Forging hot metal",
+  "kitchen-work": "Cooking seafood bowls",
+  "tackle-work": "Assembling fishing tackle",
+  "stock-unload": "Moving warehouse cargo",
+  "stock-transfer": "Stacking warehouse goods",
 };
 const WALK_LABELS: Record<ActivityId, string> = {
   wood: "Walking to the pines",
@@ -102,29 +138,21 @@ const WALK_LABELS: Record<ActivityId, string> = {
   planks: "Walking to the sawmill",
   smoked: "Walking to the smokehouse",
   market: "Walking to the market",
+  crab: "Walking to the crab shore",
+  kelp: "Walking to the kelp beds",
+  ore: "Walking to the quarry",
+  ingots: "Walking to the forge",
+  meals: "Walking to the kitchen",
+  tackle: "Walking to the boat workshop",
+  warehouse: "Walking to the warehouse",
 };
-const RESOURCE_NAME: Record<Resource, string> = {
-  wood: "timber",
-  fish: "tuna",
-  salmon: "salmon",
-  steak: "steaks",
-  plank: "planks",
-  smoked: "smoked fish",
-};
-const UPGRADE_IDS: UpgradeId[] = [
-  "axe",
-  "rod",
-  "backpack",
-  "cutter",
-  "sawmill",
-  "market",
-  "dock",
-  "crew",
-  "smokehouse",
-  "freezer",
-  "boots",
-  "nets",
-];
+const RESOURCE_NAME: Record<Resource, string> = resourceNames;
+const RAW_ACTIVITIES = ["wood", "fish", "crab", "kelp", "ore"] as const;
+const isRaw = (id: ActivityId): id is (typeof RAW_ACTIVITIES)[number] =>
+  (RAW_ACTIVITIES as readonly string[]).includes(id);
+const isRecipe = (id: ActivityId): id is RecipeId =>
+  RECIPES.some((recipe) => recipe.id === id);
+const UPGRADE_IDS = UPGRADES.map((upgrade) => upgrade.id);
 const smooth = (n: number) => {
   const t = THREE.MathUtils.clamp(n, 0, 1);
   return t * t * (3 - 2 * t);
@@ -223,16 +251,6 @@ export default function IslandScene(props: SceneProps) {
       base: THREE.Vector3;
       time: number;
     }[] = [];
-    const customerWalks: {
-      group: THREE.Group;
-      start: THREE.Vector3;
-      end: THREE.Vector3;
-      home: THREE.Vector3;
-      time: number;
-    }[] = [];
-    const customerHomes = world.customers.map((customer) =>
-      customer.position.clone(),
-    );
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
     let reducedMotion = media.matches;
     const motionChanged = () => {
@@ -247,16 +265,29 @@ export default function IslandScene(props: SceneProps) {
     let destination: Destination | null = null;
     let work: Work | null = null;
     let automatic: ActivityId | null = null;
-    let pending: { id: ActivityId; tree?: TreeNode } | null = null;
+    let pending: {
+      id: ActivityId;
+      tree?: TreeNode;
+      transfer?: "collect" | "deposit";
+    } | null = null;
     let nextWorkAt = 0;
     let lastCommand = latest.current.command?.id ?? -1;
     let lastInteract = latest.current.interactToken;
     let lastInventory = "";
     let lastUpgrades = JSON.stringify(latest.current.game.upgrades);
     let ready = false,
-      walkPhase = 0,
-      customerIndex = 0;
-    let equipped: "axe" | "rod" | null = "axe";
+      walkPhase = 0;
+    let assetsReady = false;
+    let artLoaded = false;
+    Promise.resolve(world.ready)
+      .then((loaded) => {
+        artLoaded = loaded !== false;
+        assetsReady = true;
+      })
+      .catch(() => {
+        assetsReady = true;
+      });
+    let equipped: "axe" | "rod" | "pickaxe" | "sickle" | null = "axe";
     let buildFocus: {
       position: THREE.Vector3;
       remaining: number;
@@ -290,6 +321,57 @@ export default function IslandScene(props: SceneProps) {
       steak.visible = false;
     });
 
+    const toolWood = new THREE.MeshStandardMaterial({
+      color: "#95643c",
+      roughness: 0.8,
+    });
+    const toolMetal = new THREE.MeshStandardMaterial({
+      color: "#b8cbd5",
+      roughness: 0.3,
+      metalness: 0.5,
+    });
+    function handleTool(kind: "pickaxe" | "sickle" | "hammer") {
+      const tool = new THREE.Group();
+      tool.position.set(0, -0.47, 0.04);
+      world.rightArm.add(tool);
+      tool.visible = false;
+      const handle = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.035, 0.045, 0.72, 8),
+        toolWood,
+      );
+      tool.add(handle);
+      if (kind === "sickle") {
+        const blade = new THREE.Mesh(
+          new THREE.TorusGeometry(0.23, 0.035, 5, 22, Math.PI * 1.3),
+          toolMetal,
+        );
+        blade.position.set(0.12, 0.32, 0);
+        blade.rotation.z = -0.8;
+        tool.add(blade);
+      } else {
+        const head = new THREE.Mesh(
+          new THREE.BoxGeometry(kind === "pickaxe" ? 0.7 : 0.44, 0.16, 0.17),
+          toolMetal,
+        );
+        head.position.y = 0.29;
+        head.rotation.z = kind === "pickaxe" ? 0.1 : 0;
+        tool.add(head);
+        if (kind === "pickaxe")
+          for (const sign of [-1, 1]) {
+            const point = new THREE.Mesh(
+              new THREE.ConeGeometry(0.08, 0.25, 6),
+              toolMetal,
+            );
+            point.position.set(sign * 0.42, 0.29 + sign * 0.04, 0);
+            point.rotation.z = (sign * Math.PI) / 2;
+            tool.add(point);
+          }
+      }
+      return tool;
+    }
+    const pickaxe = handleTool("pickaxe"),
+      sickle = handleTool("sickle"),
+      hammer = handleTool("hammer");
     const chipGeometry = new THREE.BoxGeometry(0.1, 0.07, 0.15);
     const snowGeometry = new THREE.IcosahedronGeometry(0.12, 0);
     const ringGeometry = new THREE.RingGeometry(0.23, 0.28, 36);
@@ -349,17 +431,17 @@ export default function IslandScene(props: SceneProps) {
     }
     function processMessage(game: GameState, id: RecipeId) {
       const reason = processBlockReason(game, id);
+      const recipe = RECIPES.find((recipe) => recipe.id === id)!;
       if (reason === "locked")
-        return id === "planks"
-          ? "Build the sawmill to turn timber into planks."
-          : "Build a smokehouse to smoke your fish.";
+        return `Build the ${UPGRADES.find((upgrade) => upgrade.id === recipe.requiredUpgrade)?.name || "workshop"} first.`;
       if (reason === "capacity")
-        return "Make room in your backpack before processing more goods.";
-      return id === "steaks"
-        ? "Catch a whole tuna first, then bring it to the cutting bench."
-        : id === "planks"
-          ? "Bring at least 3 timber to the sawmill."
-          : "Smoking needs 2 steaks and 1 timber.";
+        return "Make room in your cargo pack before making more goods.";
+      return `Bring ${Object.entries(recipe.inputs)
+        .map(
+          ([resource, amount]) =>
+            `${amount} ${resourceNames[resource as Resource]}`,
+        )
+        .join(" and ")} to ${recipe.name.toLowerCase()}.`;
     }
     function sound(kind: "chop" | "catch" | "coin" | "cut") {
       if (!latest.current.game.sound) return;
@@ -455,14 +537,7 @@ export default function IslandScene(props: SceneProps) {
       if (!force && signature === lastInventory) return;
       lastInventory = signature;
       emptyCargo();
-      const resources: Resource[] = [
-        "wood",
-        "fish",
-        "salmon",
-        "steak",
-        "plank",
-        "smoked",
-      ];
+      const resources = Object.keys(inventory) as Resource[];
       let index = 0;
       for (const resource of resources) {
         const amount = Math.min(inventory[resource], Math.max(0, 38 - index));
@@ -497,26 +572,35 @@ export default function IslandScene(props: SceneProps) {
     }
     rebuildCargo(true);
 
-    function routeTo(destinationPosition: THREE.Vector3) {
-      const step = 0.48,
-        nx = 42,
-        nz = 54;
+    let routeCache: Set<number> | null = null;
+    function routeTo(
+      destinationPosition: THREE.Vector3,
+      origin = player.position,
+    ) {
+      const step = 0.6,
+        minX = world.bounds.minX,
+        minZ = world.bounds.minZ;
+      const nx = Math.ceil((world.bounds.maxX - minX) / step) + 1;
+      const nz = Math.ceil((world.bounds.maxZ - minZ) / step) + 1;
       const position = (id: number) =>
         new THREE.Vector3(
-          (id % nx) * step - 9,
+          (id % nx) * step + minX,
           0.4,
-          Math.floor(id / nx) * step - 13,
+          Math.floor(id / nx) * step + minZ,
         );
-      const available = new Set<number>();
+      const available = routeCache || new Set<number>();
       let start = -1,
         goal = -1,
         sd = Infinity,
         gd = Infinity;
       for (let id = 0; id < nx * nz; id++) {
         const point = position(id);
-        if (!world.isWalkable(point.x, point.z)) continue;
+        if (
+          routeCache ? !routeCache.has(id) : !world.isWalkable(point.x, point.z)
+        )
+          continue;
         available.add(id);
-        const a = point.distanceToSquared(player.position),
+        const a = point.distanceToSquared(origin),
           b = point.distanceToSquared(destinationPosition);
         if (a < sd) {
           sd = a;
@@ -527,6 +611,7 @@ export default function IslandScene(props: SceneProps) {
           goal = id;
         }
       }
+      routeCache = available;
       if (start < 0 || goal < 0) return [];
       const open = new Set([start]),
         previous = new Map<number, number>(),
@@ -567,6 +652,18 @@ export default function IslandScene(props: SceneProps) {
             (!available.has(current + dx) || !available.has(current + dz * nx))
           )
             continue;
+          // Sample each edge so coarse grid cells cannot route through a thin fence.
+          const hereX = (current % nx) * step + minX;
+          const hereZ = Math.floor(current / nx) * step + minZ;
+          if (
+            ![1 / 3, 2 / 3].every((part) =>
+              world.isWalkable(
+                hereX + dx * step * part,
+                hereZ + dz * step * part,
+              ),
+            )
+          )
+            continue;
           const next = costs.get(current)! + (dx && dz ? Math.SQRT2 : 1);
           if (next < (costs.get(neighbor) ?? Infinity)) {
             previous.set(neighbor, current);
@@ -577,6 +674,25 @@ export default function IslandScene(props: SceneProps) {
       }
       return [];
     }
+    const npcs = createHarborNPCs({
+      world,
+      getGame: () => latest.current.game,
+      routeTo: (from, to) => routeTo(to, from),
+      onWorkerStart: (role) => latest.current.onWorkerStart(role),
+      onWorkerComplete: (role) => latest.current.onWorkerComplete(role),
+      onSellStock: (resource, quantity) =>
+        latest.current.onSellStock(resource, quantity),
+      onNotice: (message) => latest.current.onNotice(message),
+      isOnScreen: (position) => {
+        const projected = position.clone().project(camera);
+        return (
+          Math.abs(projected.x) < 1.12 &&
+          Math.abs(projected.y) < 1.12 &&
+          projected.z >= -1 &&
+          projected.z <= 1
+        );
+      },
+    });
     function face(position: THREE.Vector3) {
       player.rotation.y = Math.atan2(
         position.x - player.position.x,
@@ -595,6 +711,12 @@ export default function IslandScene(props: SceneProps) {
       return pos;
     }
     function stopWork() {
+      if (work?.id === "market") npcs.cancelPlayerSale();
+      pickaxe.visible = sickle.visible = hammer.visible = false;
+      const forgeFire = world.activityProps["forge-glow"];
+      if (forgeFire?.userData.baseScale)
+        forgeFire.scale.copy(forgeFire.userData.baseScale);
+      world.cutter.reset();
       if (work?.tree && work.time < 1.8) {
         work.tree.notch.visible = false;
         work.tree.pivot.rotation.set(0, 0, 0);
@@ -620,20 +742,21 @@ export default function IslandScene(props: SceneProps) {
       world.leftArm.rotation.copy(leftArmRest);
       rebuildCargo(true);
     }
-    function go(id: ActivityId, requestedTree?: TreeNode) {
+    function go(
+      id: ActivityId,
+      requestedTree?: TreeNode,
+      transfer: "collect" | "deposit" = "collect",
+    ) {
       lastNotice = "";
       if (work) {
         if (work.id === "wood" && work.time >= 1.8) {
-          pending = { id, tree: requestedTree };
+          pending = { id, tree: requestedTree, transfer };
           return;
         }
         stopWork();
       }
       const game = latest.current.game;
-      if (
-        (id === "wood" || id === "fish") &&
-        inventoryCount(game) >= capacity(game)
-      ) {
+      if (isRaw(id) && inventoryCount(game) >= capacity(game)) {
         notice("Backpack full. Take your cargo to the market.");
         automatic = null;
         return;
@@ -643,16 +766,43 @@ export default function IslandScene(props: SceneProps) {
         automatic = null;
         return;
       }
-      if (id === "steaks" || id === "planks" || id === "smoked") {
+      if (isRecipe(id)) {
         if (!canProcess(game, id)) {
           notice(processMessage(game, id));
-          if (id === "planks" && game.upgrades.sawmill < 1)
-            latest.current.onOpenBuild("sawmill");
-          if (id === "smoked" && game.upgrades.smokehouse < 1)
-            latest.current.onOpenBuild("smokehouse");
+          const needed = RECIPES.find(
+            (recipe) => recipe.id === id,
+          )?.requiredUpgrade;
+          if (needed && game.upgrades[needed] < 1)
+            latest.current.onOpenBuild(needed);
           automatic = null;
           return;
         }
+      }
+      if (
+        id === "warehouse" &&
+        (transfer === "deposit" ? !inventoryCount(game) : !stockCount(game))
+      ) {
+        notice(
+          transfer === "deposit"
+            ? "Your cargo pack is empty."
+            : "Dockhands are filling the warehouse. Check back after a delivery.",
+        );
+        automatic = null;
+        return;
+      }
+      if (
+        id === "warehouse" &&
+        (transfer === "collect"
+          ? inventoryCount(game) >= capacity(game)
+          : stockCount(game) >= stockCapacity(game))
+      ) {
+        notice(
+          transfer === "collect"
+            ? "Cargo full. Sell a load before collecting warehouse goods."
+            : "The warehouse is full. Sell or collect some stock first.",
+        );
+        automatic = null;
+        return;
       }
       const tree =
         id === "wood"
@@ -672,7 +822,7 @@ export default function IslandScene(props: SceneProps) {
         return;
       }
       const position = workPosition(id, tree);
-      destination = { id, position, tree, route: routeTo(position) };
+      destination = { id, position, tree, route: routeTo(position), transfer };
       automatic = id;
       marker.position.set(
         position.x,
@@ -685,24 +835,26 @@ export default function IslandScene(props: SceneProps) {
       if (!target.id) return;
       const id = target.id,
         game = latest.current.game;
-      if (
-        (id === "wood" || id === "fish") &&
-        inventoryCount(game) >= capacity(game)
-      ) {
+      if (isRaw(id) && inventoryCount(game) >= capacity(game)) {
         automatic = null;
         notice("Backpack full. Sell your cargo at the market.");
         return;
       }
-      if (
-        (id === "steaks" || id === "planks" || id === "smoked") &&
-        !canProcess(game, id)
-      ) {
+      if (isRecipe(id) && !canProcess(game, id)) {
         automatic = null;
         notice(processMessage(game, id));
         return;
       }
       if (id === "market" && !inventoryCount(game) && game.workersStored <= 0) {
         automatic = null;
+        return;
+      }
+      if (id === "market" && !npcs.beginPlayerSale()) {
+        notice(
+          "Customers are walking to your counter. Your captain will wait here.",
+        );
+        automatic = "market";
+        nextWorkAt = worldTime + 1;
         return;
       }
       const total =
@@ -712,7 +864,13 @@ export default function IslandScene(props: SceneProps) {
             ? 3.8 / (1 + game.upgrades.rod * 0.1 + game.upgrades.nets * 0.08)
             : id === "market"
               ? 3.4
-              : recipeDuration(game, id);
+              : id === "warehouse"
+                ? 2.2
+                : isRaw(id)
+                  ? id === "kelp"
+                    ? 3
+                    : 4
+                  : recipeDuration(game, id);
       work = {
         id,
         time: 0,
@@ -722,15 +880,31 @@ export default function IslandScene(props: SceneProps) {
         items: [],
         source: [],
         cuts: 0,
-        amount:
-          id === "wood" || id === "fish"
-            ? gatherYield(game, id)
-            : id === "market"
-              ? 0
-              : recipeYield(game, id),
+        amount: isRaw(id)
+          ? gatherYield(game, id)
+          : isRecipe(id)
+            ? recipeYield(game, id)
+            : 0,
         committed: false,
+        transfer: target.transfer,
+        contents:
+          id === "market" ||
+          (id === "warehouse" && target.transfer === "deposit")
+            ? { ...game.inventory }
+            : id === "warehouse"
+              ? { ...game.stock }
+              : undefined,
       };
       lastHit = -1;
+      pickaxe.visible = sickle.visible = hammer.visible = false;
+      if (id === "ore") {
+        equipped = "pickaxe";
+        pickaxe.visible = true;
+      }
+      if (id === "kelp") {
+        equipped = "sickle";
+        sickle.visible = true;
+      }
       if (id === "wood") {
         equipped = "axe";
         face(target.tree!.position);
@@ -770,6 +944,12 @@ export default function IslandScene(props: SceneProps) {
             : p * 3.8 < 2.85
               ? "fish-flight"
               : "fish-land";
+      if (action.id === "crab")
+        return p < 0.25 ? "pot-lower" : p < 0.72 ? "pot-haul" : "gather-pickup";
+      if (action.id === "kelp") return p < 0.72 ? "kelp-cut" : "gather-pickup";
+      if (action.id === "ore") return p < 0.72 ? "ore-strike" : "gather-pickup";
+      if (action.id === "warehouse")
+        return p < 0.45 ? "stock-unload" : "stock-transfer";
       if (action.id === "market")
         return p < 0.3
           ? "sale-goods"
@@ -782,7 +962,13 @@ export default function IslandScene(props: SceneProps) {
           ? "cut"
           : action.id === "planks"
             ? "saw-cut"
-            : "smoking";
+            : action.id === "smoked"
+              ? "smoking"
+              : action.id === "ingots"
+                ? "forge-work"
+                : action.id === "meals"
+                  ? "kitchen-work"
+                  : "tackle-work";
       return p < 0.88
         ? action.id === "steaks"
           ? "steak-conveyor"
@@ -876,12 +1062,8 @@ export default function IslandScene(props: SceneProps) {
         world.bobber.visible = false;
       }
       if (phase === "process-unload") {
-        const resource: Resource =
-          action.id === "steaks"
-            ? "fish"
-            : action.id === "planks"
-              ? "wood"
-              : "steak";
+        const recipe = RECIPES.find((recipe) => recipe.id === action.id)!;
+        const resource = Object.keys(recipe.inputs)[0] as Resource;
         const item = addItem(
           action,
           resource,
@@ -901,13 +1083,19 @@ export default function IslandScene(props: SceneProps) {
           action.source = [];
           action.actor = undefined;
         }
-        world.cutter.fish.visible = true;
+        world.cutter.setCutProgress(0, action.amount);
       }
       if (phase === "steak-conveyor" || phase === "goods-conveyor") {
         if (action.actor) {
           scene.remove(action.actor);
           action.actor = undefined;
         }
+        const slicedPositions =
+          phase === "steak-conveyor"
+            ? world.cutter.steaks
+                .filter((item) => item.visible)
+                .map((item) => item.getWorldPosition(new THREE.Vector3()))
+            : [];
         removeItems(action.items);
         action.source = [];
         world.cutter.fish.visible = false;
@@ -915,25 +1103,78 @@ export default function IslandScene(props: SceneProps) {
           item.visible = false;
         });
         const station = world.stations[action.id as RecipeId].position;
-        const resource: Resource =
-          action.id === "steaks"
-            ? "steak"
-            : action.id === "planks"
-              ? "plank"
-              : "smoked";
+        const resource = RECIPES.find(
+          (recipe) => recipe.id === action.id,
+        )!.output;
         for (let i = 0; i < Math.min(7, action.amount); i++)
           addItem(
             action,
             resource,
-            station.clone().add(new THREE.Vector3(0.1 + i * 0.22, 1.1, 0)),
-            0.75,
+            slicedPositions[i] ||
+              station.clone().add(new THREE.Vector3(0.1 + i * 0.22, 1.1, 0)),
+            phase === "steak-conveyor" ? 1.32 : 0.75,
           );
       }
+      if (["pot-lower", "kelp-cut", "ore-strike"].includes(phase)) {
+        const resource = action.id as Resource;
+        const item = addItem(
+          action,
+          resource,
+          world.stations[action.id as Exclude<ActivityId, "wood">].position
+            .clone()
+            .add(new THREE.Vector3(0, 0.6, 0)),
+          0.8,
+        );
+        if (phase === "pot-lower") item.visible = false;
+      }
+      if (phase === "pot-haul") {
+        if (!action.items.length)
+          addItem(action, "crab", world.stations.crab.position.clone(), 0.8);
+        action.items.forEach((item) => (item.visible = true));
+        burst(
+          world.stations.crab.position
+            .clone()
+            .add(new THREE.Vector3(-0.8, -0.1, 0)),
+          "water",
+          14,
+        );
+        sound("catch");
+      }
+      if (phase === "gather-pickup")
+        action.source = action.items.map((item) => item.position.clone());
+      if (phase === "stock-unload") {
+        let index = 0;
+        for (const [resource, amount] of Object.entries(
+          action.contents || {},
+        )) {
+          for (
+            let i = 0;
+            i < Math.min(3, amount || 0) && index < 9;
+            i++, index++
+          ) {
+            const origin =
+              action.transfer === "deposit"
+                ? backPosition().add(new THREE.Vector3(0, index * 0.09, 0))
+                : world.stations.warehouse.position
+                    .clone()
+                    .add(
+                      new THREE.Vector3(
+                        -0.8 + (index % 3) * 0.35,
+                        0.75 + Math.floor(index / 3) * 0.2,
+                        0.5,
+                      ),
+                    );
+            addItem(action, resource as Resource, origin, 0.6);
+          }
+        }
+      }
+      if (phase === "stock-transfer")
+        action.source = action.items.map((item) => item.position.clone());
       if (phase === "sale-goods") {
-        const game = latest.current.game;
+        const inventory = action.contents || latest.current.game.inventory;
         let itemCount = 0;
-        for (const resource of Object.keys(game.inventory) as Resource[]) {
-          for (let i = 0; i < Math.min(3, game.inventory[resource]); i++) {
+        for (const resource of Object.keys(inventory) as Resource[]) {
+          for (let i = 0; i < Math.min(3, inventory[resource] || 0); i++) {
             if (itemCount >= 10) break;
             const item = addItem(
               action,
@@ -943,23 +1184,6 @@ export default function IslandScene(props: SceneProps) {
             );
             item.userData.index = itemCount++;
           }
-        }
-      }
-      if (phase === "sale-customer") {
-        const customer =
-          world.customers[customerIndex % world.customers.length];
-        if (customer) {
-          const home = customerHomes[customerIndex % world.customers.length];
-          customerIndex++;
-          customerWalks.push({
-            group: customer,
-            start: customer.position.clone(),
-            end: world.stations.market.position
-              .clone()
-              .add(new THREE.Vector3(2, 0, 1)),
-            home: home.clone(),
-            time: 0,
-          });
         }
       }
       if (phase === "sale-cash") {
@@ -1108,6 +1332,119 @@ export default function IslandScene(props: SceneProps) {
           attribute.needsUpdate = true;
           world.fishingLine.geometry.computeBoundingSphere();
         }
+      } else if (
+        action.id === "crab" ||
+        action.id === "kelp" ||
+        action.id === "ore"
+      ) {
+        const station = world.stations[action.id];
+        const prop = station.group.getObjectByName(
+          action.id === "crab"
+            ? "crab-pot"
+            : action.id === "kelp"
+              ? "kelp-stems"
+              : "ore-rock",
+        );
+        if (phase === "gather-pickup") {
+          const t = clamp((p - 0.72) / 0.28);
+          action.items.forEach((item, i) =>
+            arc(
+              item,
+              action.source[i],
+              backPosition().add(new THREE.Vector3(0, i * 0.15, 0)),
+              smooth(t),
+              1.2,
+            ),
+          );
+          activeObject = action.items[0] || player;
+        } else if (action.id === "crab") {
+          world.rightArm.rotation.x = -0.8 + Math.sin(action.time * 5) * 0.65;
+          world.leftArm.rotation.x = -0.8 - Math.sin(action.time * 5) * 0.4;
+          if (prop) {
+            prop.position.y =
+              phase === "pot-haul"
+                ? -1.1 + smooth((p - 0.25) / 0.47) * 1.8
+                : -0.3 - p * 3;
+            activeObject = prop;
+          }
+          action.items.forEach((item) => {
+            item.position
+              .copy(station.position)
+              .add(
+                new THREE.Vector3(
+                  -0.3,
+                  -0.3 + smooth((p - 0.25) / 0.47) * 1.6,
+                  0,
+                ),
+              );
+            item.rotation.z = Math.sin(action.time * 8) * 0.12;
+          });
+        } else if (action.id === "kelp") {
+          world.axe.visible = false;
+          sickle.visible = true;
+          pickaxe.visible = false;
+          world.rightArm.rotation.x = -0.8 + Math.sin(action.time * 7) * 0.7;
+          if (prop) {
+            prop.rotation.z = Math.sin(action.time * 7) * 0.12;
+            activeObject = prop;
+          }
+          action.items.forEach((item) => {
+            item.position
+              .copy(station.position)
+              .add(
+                new THREE.Vector3(
+                  0,
+                  0.65 + Math.sin(action.time * 3) * 0.08,
+                  0,
+                ),
+              );
+          });
+        } else {
+          world.axe.visible = false;
+          pickaxe.visible = true;
+          sickle.visible = false;
+          const hit = Math.floor(action.time * 2.5);
+          world.rightArm.rotation.x = -1.1 + Math.sin(action.time * 8) * 1;
+          if (hit !== lastHit) {
+            lastHit = hit;
+            burst(
+              station.position.clone().add(new THREE.Vector3(0, 0.7, 0)),
+              "chips",
+              7,
+            );
+            sound("chop");
+          }
+          if (prop) {
+            prop.rotation.z = Math.sin(action.time * 22) * 0.015;
+            activeObject = prop;
+          }
+          action.items.forEach((item) => {
+            item.position
+              .copy(station.position)
+              .add(new THREE.Vector3(0.3, 0.6, 0.2));
+            item.rotation.x = action.time;
+          });
+        }
+      } else if (action.id === "warehouse") {
+        const t = phase === "stock-unload" ? 0 : smooth((p - 0.45) / 0.55);
+        const to =
+          action.transfer === "deposit"
+            ? world.stations.warehouse.position
+                .clone()
+                .add(new THREE.Vector3(0, 1, 0.5))
+            : backPosition();
+        action.items.forEach((item, i) => {
+          arc(
+            item,
+            action.source[i],
+            to.clone().add(new THREE.Vector3(0, i * 0.1, 0)),
+            t,
+            1.25,
+          );
+          item.rotation.y += dt * 2;
+        });
+        world.rightArm.rotation.x = -0.8 + Math.sin(action.time * 5) * 0.2;
+        activeObject = action.items[0] || player;
       } else if (action.id === "market") {
         const market = world.stations.market.position
           .clone()
@@ -1160,8 +1497,9 @@ export default function IslandScene(props: SceneProps) {
           activeObject = action.actor;
         } else if (phase === "cut") {
           const cutProgress = clamp((p - 0.12) / 0.56),
-            hit = Math.min(2, Math.floor(cutProgress * 3)),
-            local = (cutProgress * 3) % 1;
+            slices = Math.max(4, Math.min(6, action.amount)) + 1,
+            hit = Math.min(slices - 1, Math.floor(cutProgress * slices)),
+            local = (cutProgress * slices) % 1;
           world.cutter.cleaver.visible =
             latest.current.game.upgrades.cutter === 0;
           world.cutter.cleaver.position.y =
@@ -1172,14 +1510,12 @@ export default function IslandScene(props: SceneProps) {
             pistonBase.y - Math.sin(local * Math.PI) * 0.45;
           world.cutter.blade.rotation.z += dt * 19;
           world.cutter.secondBlade.rotation.z -= dt * 19;
-          world.cutter.fish.scale.x =
-            initialCutterFishScale.x * (1 - cutProgress * 0.72);
+          world.cutter.setCutProgress(cutProgress, action.amount);
           world.rightArm.rotation.x = -0.4 - Math.sin(local * Math.PI) * 0.9;
-          if (local > 0.4 && hit > lastHit) {
+          if (local >= 0.5 && hit > lastHit) {
             lastHit = hit;
             sound("cut");
-            const steak = world.cutter.steaks[hit];
-            if (steak) steak.visible = true;
+
             burst(
               station.clone().add(new THREE.Vector3(0, 1.1, 0)),
               "water",
@@ -1189,7 +1525,15 @@ export default function IslandScene(props: SceneProps) {
           activeObject = latest.current.game.upgrades.cutter
             ? world.cutter.blade
             : world.cutter.cleaver;
-        } else if (phase === "saw-cut" || phase === "smoking") {
+        } else if (
+          [
+            "saw-cut",
+            "smoking",
+            "forge-work",
+            "kitchen-work",
+            "tackle-work",
+          ].includes(phase)
+        ) {
           if (action.actor) {
             action.actor.position
               .copy(station)
@@ -1197,7 +1541,38 @@ export default function IslandScene(props: SceneProps) {
             action.actor.scale.z = Math.max(0.1, 1 - (p - 0.12) * 0.8);
             activeObject = action.actor;
           }
-          world.rightArm.rotation.x = -0.5 + Math.sin(action.time * 9) * 0.2;
+          world.rightArm.rotation.x =
+            -0.6 +
+            Math.sin(action.time * (phase === "kitchen-work" ? 4 : 9)) * 0.42;
+          world.leftArm.rotation.x = -0.6 + Math.cos(action.time * 4) * 0.18;
+          hammer.visible = phase === "forge-work" || phase === "tackle-work";
+          const propName =
+            phase === "forge-work"
+              ? "forge-hammer"
+              : phase === "kitchen-work"
+                ? "cooking-spoon"
+                : phase === "tackle-work"
+                  ? "boatyard-hammer"
+                  : "";
+          const motionProp = propName
+            ? world.stations[action.id as RecipeId].group.getObjectByName(
+                propName,
+              )
+            : undefined;
+          if (motionProp) {
+            motionProp.rotation.z = Math.sin(action.time * 7) * 0.5;
+            activeObject = motionProp;
+          }
+          const glow = world.stations[
+            action.id as RecipeId
+          ].group.getObjectByName("forge-glow") as THREE.Mesh | undefined;
+          if (glow && phase === "forge-work") {
+            const base = glow.userData.baseScale as THREE.Vector3;
+            if (base)
+              glow.scale
+                .copy(base)
+                .multiplyScalar(1 + Math.sin(action.time * 11) * 0.08);
+          }
           if (phase === "saw-cut" && Math.floor(action.time * 5) > lastHit) {
             lastHit = Math.floor(action.time * 5);
             burst(
@@ -1234,26 +1609,46 @@ export default function IslandScene(props: SceneProps) {
     function finish(action: Work) {
       if (action.committed) return;
       action.committed = true;
+      pickaxe.visible = sickle.visible = hammer.visible = false;
       let amount = 0;
-      if (action.id === "wood" || action.id === "fish")
-        amount = latest.current.onHarvest(action.id);
+      if (isRaw(action.id)) amount = latest.current.onHarvest(action.id);
       else if (action.id === "market") {
         amount = latest.current.onSell();
+        if (amount) npcs.finishPlayerSale(action.contents);
+        else npcs.cancelPlayerSale();
         sound("coin");
         burst(
           player.position.clone().add(new THREE.Vector3(0, 1.5, 0)),
           "cash",
           7,
         );
-      } else if (latest.current.onProcess(action.id)) amount = action.amount;
-      if (amount)
+      } else if (action.id === "warehouse")
+        amount =
+          action.transfer === "deposit"
+            ? latest.current.onDepositStock()
+            : latest.current.onCollectStock();
+      else if (isRecipe(action.id) && latest.current.onProcess(action.id))
+        amount = action.amount;
+      if (amount) {
+        const product = isRaw(action.id)
+          ? action.id
+          : isRecipe(action.id)
+            ? RECIPES.find((recipe) => recipe.id === action.id)!.output
+            : null;
         label(
           action.id === "market"
             ? `+${amount.toLocaleString()} cash`
-            : `+${amount} ${RESOURCE_NAME[action.id === "wood" ? "wood" : action.id === "fish" ? "fish" : action.id === "steaks" ? "steak" : action.id === "planks" ? "plank" : "smoked"]}`,
+            : action.id === "warehouse"
+              ? `${action.transfer === "deposit" ? "Stored" : "Collected"} ${amount} goods`
+              : `+${amount} ${RESOURCE_NAME[product!]}`,
           player.position.clone().add(new THREE.Vector3(0, 2.5, 0)),
           action.id === "market" ? "#aaff91" : "#fff4b9",
         );
+      }
+      const forgeFire = world.activityProps["forge-glow"];
+      if (forgeFire?.userData.baseScale)
+        forgeFire.scale.copy(forgeFire.userData.baseScale);
+      world.cutter.reset();
       removeItems(action.items);
       world.cutter.fish.visible = false;
       world.cutter.fish.scale.copy(initialCutterFishScale);
@@ -1273,20 +1668,18 @@ export default function IslandScene(props: SceneProps) {
       work = null;
       destination = null;
       nextWorkAt = worldTime + 0.35;
-      if (!amount || action.id === "market") automatic = null;
+      if (!amount || action.id === "market" || action.id === "warehouse")
+        automatic = null;
       renderer.shadowMap.needsUpdate = true;
     }
 
     function closestInteraction() {
       if (work) return;
       let selected: { id: ActivityId; distance: number } | null = null;
-      for (const id of [
-        "fish",
-        "steaks",
-        "planks",
-        "smoked",
-        "market",
-      ] as const) {
+      for (const id of Object.keys(world.stations) as Exclude<
+        ActivityId,
+        "wood"
+      >[]) {
         const distance = world.stations[id].workPosition.distanceTo(
           player.position,
         );
@@ -1324,13 +1717,10 @@ export default function IslandScene(props: SceneProps) {
           if (tree) return { kind: "activity", id: "wood", tree };
           if (world.fish.includes(object as THREE.Group))
             return { kind: "activity", id: "fish" };
-          for (const id of [
-            "fish",
-            "steaks",
-            "planks",
-            "smoked",
-            "market",
-          ] as const)
+          for (const id of Object.keys(world.stations) as Exclude<
+            ActivityId,
+            "wood"
+          >[])
             if (object === world.stations[id].group)
               return { kind: "activity", id };
           object = object.parent;
@@ -1424,7 +1814,7 @@ export default function IslandScene(props: SceneProps) {
         !current.paused
       ) {
         lastCommand = current.command.id;
-        go(current.command.target);
+        go(current.command.target, undefined, current.command.transfer);
       }
       if (current.interactToken !== lastInteract && !current.paused) {
         lastInteract = current.interactToken;
@@ -1435,6 +1825,7 @@ export default function IslandScene(props: SceneProps) {
         const oldLevels = JSON.parse(lastUpgrades) as GameState["upgrades"];
         lastUpgrades = upgrades;
         const changed = world.applyUpgrades(game.upgrades);
+        routeCache = null;
         const upgradedId = UPGRADE_IDS.find(
           (id) => game.upgrades[id] > oldLevels[id],
         );
@@ -1551,12 +1942,12 @@ export default function IslandScene(props: SceneProps) {
           if (pending) {
             const next = pending;
             pending = null;
-            go(next.id, next.tree);
+            go(next.id, next.tree, next.transfer);
           } else go(automatic);
         } else if (!work && pending) {
           const next = pending;
           pending = null;
-          go(next.id, next.tree);
+          go(next.id, next.tree, next.transfer);
         }
       }
       if (moving) walkPhase += dt * 13;
@@ -1571,6 +1962,9 @@ export default function IslandScene(props: SceneProps) {
         leg.rotation.x = moving ? Math.sin(walkPhase + i * Math.PI) * 0.65 : 0;
       });
       if (!work) {
+        pickaxe.visible = equipped === "pickaxe";
+        sickle.visible = equipped === "sickle";
+        hammer.visible = false;
         world.axe.visible = equipped === "axe";
         world.rod.visible = equipped === "rod";
         world.rightArm.rotation.x = moving
@@ -1602,6 +1996,7 @@ export default function IslandScene(props: SceneProps) {
           }
         }
       }
+      npcs.update(dt, worldTime);
       const ambientTime = reducedMotion ? 0 : worldTime;
       world.fish.forEach((fish, i) => {
         const base = fish.userData.basePosition as THREE.Vector3 | undefined;
@@ -1624,52 +2019,6 @@ export default function IslandScene(props: SceneProps) {
         world.cutter.blade.rotation.z += reducedMotion ? 0 : dt * 4;
       if (world.cutter.secondBlade.visible && work?.id !== "steaks")
         world.cutter.secondBlade.rotation.z -= reducedMotion ? 0 : dt * 4;
-      world.upgradeGroups.crew.forEach((group, i) => {
-        if (!group.visible) return;
-        const worker = group.children.find(
-          (object) => object.userData.workerPerson,
-        ) as THREE.Group | undefined;
-        if (!worker) return;
-        const destinations = [
-          new THREE.Vector3(-4.7, 0.4, 2.7),
-          world.stations.steaks.workPosition,
-          world.stations.fish.workPosition,
-          world.stations.market.workPosition,
-          world.stations.smoked.workPosition,
-        ];
-        const routeEnd = destinations[i].clone().sub(group.position);
-        const phase = (ambientTime * 0.12 + i * 0.17) % 1;
-        const travel =
-          phase < 0.375
-            ? smooth(phase / 0.375)
-            : phase < 0.5
-              ? 1
-              : phase < 0.875
-                ? 1 - smooth((phase - 0.5) / 0.375)
-                : 0;
-        worker.position.copy(routeEnd).multiplyScalar(travel);
-        const walking = phase < 0.375 || (phase >= 0.5 && phase < 0.875);
-        worker.position.y =
-          walking && !reducedMotion
-            ? Math.abs(Math.sin(ambientTime * 12 + i)) * 0.055
-            : 0;
-        worker.rotation.y =
-          Math.atan2(routeEnd.x, routeEnd.z) + (phase >= 0.5 ? Math.PI : 0);
-        (worker.userData.legs as THREE.Group[]).forEach((leg, j) => {
-          leg.rotation.x = walking
-            ? Math.sin(ambientTime * 12 + i + j * Math.PI) * 0.55
-            : 0;
-        });
-        (worker.userData.arms as THREE.Group[]).forEach((arm, j) => {
-          arm.rotation.x = walking
-            ? Math.sin(ambientTime * 12 + i + j * Math.PI) * 0.4
-            : phase < 0.5
-              ? -0.8 + Math.sin(ambientTime * 9) * 0.6
-              : -0.4;
-        });
-        (worker.userData.carrying as THREE.Group).visible =
-          phase >= 0.45 && phase < 0.93;
-      });
       world.smokePuffs.forEach((puff, i) => {
         const t = (ambientTime * 0.3 + i * 0.19) % 1;
         puff.position.y = 2.6 + t * 2.2;
@@ -1689,30 +2038,6 @@ export default function IslandScene(props: SceneProps) {
           build.group.scale.copy(build.base);
           construction.splice(i, 1);
           renderer.shadowMap.needsUpdate = true;
-        }
-      }
-      for (let i = customerWalks.length - 1; i >= 0; i--) {
-        const walk = customerWalks[i];
-        walk.time += dt;
-        if (walk.time < 0.6)
-          walk.group.position.lerpVectors(
-            walk.start,
-            walk.end,
-            smooth(walk.time / 0.6),
-          );
-        else if (walk.time < 3.8) {
-          const t = (walk.time - 0.6) / 3.2;
-          walk.group.position.lerpVectors(
-            walk.end,
-            new THREE.Vector3(10.5, 0.4, 9),
-            t,
-          );
-          walk.group.rotation.y = 1;
-          walk.group.position.y += Math.abs(Math.sin(walk.time * 12)) * 0.05;
-        } else {
-          walk.group.position.copy(walk.home);
-          walk.group.rotation.y = -Math.PI / 2;
-          customerWalks.splice(i, 1);
         }
       }
       for (let i = particles.length - 1; i >= 0; i--) {
@@ -1801,28 +2126,65 @@ export default function IslandScene(props: SceneProps) {
           (group) => group.visible,
         ).length;
       canvas.dataset.upgradeVisuals = JSON.stringify(visualLevels);
+      canvas.dataset.buildingScales = JSON.stringify(
+        UPGRADE_IDS.flatMap((id) =>
+          world.upgradeGroups[id]
+            .map((group, stage) => ({
+              id,
+              stage: stage + 1,
+              visible: group.visible,
+              scale: Number(group.scale.x.toFixed(4)),
+            }))
+            .filter((stage) => stage.visible),
+        ),
+      );
       canvas.dataset.machineCount = String(
         Object.values(visualLevels).reduce((sum, n) => sum + n, 0),
       );
       canvas.dataset.hit = String(lastHit + 1);
+      canvas.dataset.cutSlices = String(
+        world.cutter.steaks.filter((piece) => piece.visible).length,
+      );
+      canvas.dataset.cutContacts = String(
+        world.cutter.fish.userData.cutContacts || 0,
+      );
+      canvas.dataset.cutKnifeX = world.cutter.cleaver.position.x.toFixed(3);
+      canvas.dataset.slicePositions = JSON.stringify(
+        world.cutter.steaks
+          .filter((piece) => piece.visible)
+          .map((piece) => {
+            const p = piece.getWorldPosition(new THREE.Vector3());
+            return [
+              Number(p.x.toFixed(3)),
+              Number(p.y.toFixed(3)),
+              Number(p.z.toFixed(3)),
+            ];
+          }),
+      );
+      const population = npcs.diagnostics();
+      canvas.dataset.workers = JSON.stringify(population.workers);
+      canvas.dataset.customers = JSON.stringify(population.customers);
+      canvas.dataset.worldBounds = JSON.stringify(world.bounds);
+      canvas.dataset.generatedMaterials = String(artLoaded);
+      canvas.dataset.stockCount = String(stockCount(game));
       if (reportTimer >= 0.125) {
         reportTimer = 0;
         const id = work?.id || destination?.id || null;
         latest.current.onActivity({
           id,
           label: current.paused
-            ? "Harbor paused"
+            ? "Captain paused"
             : work
               ? PHASE_LABELS[work.phase] || LABELS[work.id]
               : destination?.id
                 ? WALK_LABELS[destination.id]
-                : "Explore your harbor",
+                : "",
           progress: work ? clamp(work.time / work.total) : 0,
           busy: !!work || !!destination,
         });
       }
       renderer.render(scene, camera);
-      if (!ready) {
+      if (!ready && assetsReady) {
         ready = true;
         latest.current.onReady();
       }
@@ -1852,6 +2214,7 @@ export default function IslandScene(props: SceneProps) {
       waterMaterial.dispose();
       cashMaterial.dispose();
       markerMaterial.dispose();
+      npcs.dispose();
       world.dispose();
       renderer.dispose();
       canvas.remove();

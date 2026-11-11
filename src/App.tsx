@@ -14,6 +14,8 @@ import {
   Flag,
   Hammer,
   Maximize2,
+  PackageCheck,
+  Signpost,
   Minus,
   Plus,
   Settings,
@@ -48,6 +50,8 @@ import {
   RESOURCE_PRICES,
   resourceNames,
   sellValue,
+  stockCount,
+  stockCapacity,
   serializeGame,
   UPGRADES,
   upgradeCost,
@@ -61,12 +65,22 @@ import type {
   RecipeId,
   Resource,
   UpgradeId,
+  WorkerRole,
 } from "./game/model";
 import { CashArt, ResourceArt, UpgradeArt } from "./Art";
+import { WorkplacesPanel, WarehousePanel, CrewOverview } from "./HarborPanels";
 
 const SAVE_KEY = "frost-and-fin:save:v1";
-type Menu = "build" | "cargo" | "goals" | "settings" | "help" | null;
-type Category = "Yard" | "Gear" | "Crew";
+type Menu =
+  | "build"
+  | "cargo"
+  | "goals"
+  | "settings"
+  | "help"
+  | "workplaces"
+  | "warehouse"
+  | null;
+type Category = "Yard" | "Industry" | "Gear" | "Crew";
 type WorkInfo = {
   id: ActivityId | null;
   label: string;
@@ -78,7 +92,17 @@ const groupFor = (id: UpgradeId): Category =>
     ? "Crew"
     : ["axe", "rod", "backpack", "boots", "nets"].includes(id)
       ? "Gear"
-      : "Yard";
+      : [
+            "cutter",
+            "sawmill",
+            "smokehouse",
+            "freezer",
+            "forge",
+            "kitchen",
+            "boatyard",
+          ].includes(id)
+        ? "Industry"
+        : "Yard";
 const pretty = (value: number) =>
   new Intl.NumberFormat("en-US", {
     notation: value >= 100000 ? "compact" : "standard",
@@ -91,6 +115,13 @@ const activityNames: Record<ActivityId, string> = {
   planks: "SAW",
   smoked: "SMOKE",
   market: "SELL",
+  crab: "HAUL",
+  kelp: "GATHER",
+  ore: "MINE",
+  ingots: "SMELT",
+  meals: "COOK",
+  tackle: "MAKE",
+  warehouse: "TRANSFER",
 };
 const visualStages: Record<UpgradeId, string[]> = {
   axe: [
@@ -147,7 +178,10 @@ const visualStages: Record<UpgradeId, string[]> = {
     "Hire a second helper",
     "Bring in a third hand",
     "Add another dockhand",
-    "Hire the full crew",
+    "Hire the porter",
+    "Hire a kelp gardener",
+    "Hire a crabber",
+    "Hire the harbor cook",
   ],
   smokehouse: [
     "Build a fired smoker",
@@ -176,6 +210,55 @@ const visualStages: Record<UpgradeId, string[]> = {
     "Set a third river net",
     "Add a fourth net",
     "Full fishing-net rack",
+  ],
+  crabpots: [
+    "Build a pot-hoist dock",
+    "Add a second crab pot",
+    "Fit a powered winch",
+    "Build a baiting shelter",
+    "Full crabbing dock",
+  ],
+  kelpfarm: [
+    "Build cultivation beds",
+    "Add more kelp rows",
+    "Fit harvesting racks",
+    "Build a glass growhouse",
+    "Full kelp greenhouse",
+  ],
+  quarry: [
+    "Build a quarry yard",
+    "Add ore sorting racks",
+    "Install a powered drill",
+    "Build a quarry shelter",
+    "Full quarry works",
+  ],
+  forge: [
+    "Build a working furnace",
+    "Add a hot-metal anvil",
+    "Install bellows & chimney",
+    "Expand the forge roof",
+    "Complete the foundry",
+  ],
+  kitchen: [
+    "Build a seafood kitchen",
+    "Add a cooking range",
+    "Fit preparation counters",
+    "Expand the kitchen",
+    "Complete the harbor restaurant",
+  ],
+  boatyard: [
+    "Build a tackle workshop",
+    "Add tool benches",
+    "Build a covered slipway",
+    "Expand the boathouse",
+    "Complete the boatyard",
+  ],
+  warehouse: [
+    "Build a loading platform",
+    "Add storage crates",
+    "Build a warehouse roof",
+    "Fit a cargo crane",
+    "Complete the warehouse",
   ],
 };
 
@@ -330,10 +413,10 @@ function objectiveFor(game: GameState): {
       progress: game.processed.planks,
       total: 2,
     };
-  if (game.upgrades.crew < 1)
+  if (game.upgrades.crew < 2)
     return {
-      title: "Hire your first dockhand",
-      detail: "A real helper, working on your dock",
+      title: "Hire a fishing specialist",
+      detail: "Workers gather and carry supplies to storage",
       target: "build",
       upgrade: "crew",
       progress: 0,
@@ -348,23 +431,100 @@ function objectiveFor(game: GameState): {
       progress: 0,
       total: 1,
     };
+  if (game.gathered.crab < 1)
+    return {
+      title: "Haul your first crab pot",
+      detail: "Visit the south shore and lift a pot.",
+      target: "crab",
+      progress: game.gathered.crab,
+      total: 1,
+    };
+  if (game.gathered.kelp < 3)
+    return {
+      title: "Harvest the kelp beds",
+      detail: "There is more to gather up the coast.",
+      target: "kelp",
+      progress: game.gathered.kelp,
+      total: 3,
+    };
+  if (game.gathered.ore < 3)
+    return {
+      title: "Work the quarry",
+      detail: "Break rock and bring back metal ore.",
+      target: "ore",
+      progress: game.gathered.ore,
+      total: 3,
+    };
+  if (game.upgrades.forge < 1)
+    return {
+      title: "Build your forge",
+      detail: "Turn ore and timber into metal.",
+      target: "build",
+      upgrade: "forge",
+      progress: 0,
+      total: 1,
+    };
+  if (game.processed.ingots < 2)
+    return {
+      title: "Smelt your first ingots",
+      detail: "Bring 3 ore and a log to the furnace.",
+      target: "ingots",
+      progress: game.processed.ingots,
+      total: 2,
+    };
+  if (game.upgrades.kitchen < 1)
+    return {
+      title: "Open the harbor kitchen",
+      detail: "Cook seafood and kelp into hot meals.",
+      target: "build",
+      upgrade: "kitchen",
+      progress: 0,
+      total: 1,
+    };
+  if (game.processed.meals < 2)
+    return {
+      title: "Cook a seafood meal",
+      detail: "Take a steak and kelp to the kitchen.",
+      target: "meals",
+      progress: game.processed.meals,
+      total: 2,
+    };
+  if (game.upgrades.boatyard < 1)
+    return {
+      title: "Build a boathouse",
+      detail: "A new workshop at the south docks.",
+      target: "build",
+      upgrade: "boatyard",
+      progress: 0,
+      total: 1,
+    };
+  if (game.processed.tackle < 2)
+    return {
+      title: "Make a tackle kit",
+      detail: "Combine planks and metal at the boatyard.",
+      target: "tackle",
+      progress: game.processed.tackle,
+      total: 2,
+    };
   return {
     title: "Build a working harbor",
-    detail: "12 upgrades. All right here on your dock.",
+    detail: "More industries, more jobs, and a growing harbor.",
     target: "build",
     progress: UPGRADES.filter((u) => game.upgrades[u.id] > 0).length,
-    total: 12,
+    total: UPGRADES.length,
   };
 }
 
 export default function App() {
   const [game, setGame] = useState<GameState>(initialGame),
     stateRef = useRef(game);
+  const [sceneRevision, setSceneRevision] = useState(0);
   const [menu, setMenu] = useState<Menu>(null),
     [category, setCategory] = useState<Category>("Yard");
   const [command, setCommand] = useState<{
       id: number;
       target: ActivityId;
+      transfer?: "collect" | "deposit";
     } | null>(null),
     commandId = useRef(0);
   const [joystick, setJoystick] = useState({ x: 0, y: 0 }),
@@ -408,12 +568,27 @@ export default function App() {
     setResetConfirm(false);
   }, []);
   const go = useCallback(
-    (target: ActivityId) => {
+    (target: ActivityId, transfer?: "collect" | "deposit") => {
       close();
-      setCommand({ id: ++commandId.current, target });
+      setCommand({ id: ++commandId.current, target, transfer });
     },
     [close],
   );
+  const restoreHarbor = (next: GameState) => {
+    stateRef.current = next;
+    setGame(next);
+    setName(next.playerName);
+    setCommand(null);
+    joyPointer.current = null;
+    setJoystick({ x: 0, y: 0 });
+    setInteractToken(0);
+    setWork({ id: null, label: "", progress: 0, busy: false });
+    setCoinFlash(0);
+    setRecentBuild("");
+    setReady(false);
+    setSceneRevision((revision) => revision + 1);
+    close();
+  };
   const openBuild = useCallback(
     (id?: UpgradeId) => {
       if (id) setCategory(groupFor(id));
@@ -457,6 +632,45 @@ export default function App() {
     }
     return earned;
   }, [act, notify]);
+  const workerStart = useCallback(
+    (role: WorkerRole) => {
+      const before = stateRef.current;
+      const next = act({ type: "workerStart", role, now: Date.now() });
+      return !before.workerJobs[role] && !!next.workerJobs[role];
+    },
+    [act],
+  );
+  const workerComplete = useCallback(
+    (role: WorkerRole) => {
+      const before = stateRef.current;
+      const next = act({ type: "workerComplete", role, now: Date.now() });
+      return !!before.workerJobs[role] && !next.workerJobs[role];
+    },
+    [act],
+  );
+  const sellStock = useCallback(
+    (resource: Resource, quantity: number) => {
+      const before = stateRef.current.coins;
+      const next = act({ type: "sellStock", resource, quantity });
+      const amount = next.coins - before;
+      if (amount > 0) {
+        setCoinFlash(amount);
+        setTimeout(() => setCoinFlash(0), 1700);
+      }
+      return amount;
+    },
+    [act],
+  );
+  const collectStock = useCallback(() => {
+    const before = inventoryCount(stateRef.current);
+    const next = act({ type: "takeStock" });
+    return inventoryCount(next) - before;
+  }, [act]);
+  const depositStock = useCallback(() => {
+    const before = inventoryCount(stateRef.current);
+    const next = act({ type: "depositStock" });
+    return before - inventoryCount(next);
+  }, [act]);
   const buy = (id: UpgradeId) => {
     act({ type: "tick", now: Date.now() });
     const before = stateRef.current;
@@ -466,7 +680,6 @@ export default function App() {
       const upgrade = UPGRADES.find((u) => u.id === id)!;
       setRecentBuild(`${upgrade.name} · Tier ${next.upgrades[id]}`);
       setTimeout(() => setRecentBuild(""), 3300);
-      notify(`Watch your ${upgrade.name.toLowerCase()} upgrade!`);
     } else notify("Sell another load to afford this upgrade.");
   };
   const claim = (id: string) => {
@@ -557,6 +770,7 @@ export default function App() {
     <div className="game-screen" ref={frame}>
       <div className="world-layer">
         <IslandScene
+          key={sceneRevision}
           game={game}
           paused={!!menu}
           command={command}
@@ -569,6 +783,11 @@ export default function App() {
           onActivity={setWork}
           onNotice={notify}
           onOpenBuild={openBuild}
+          onWorkerStart={workerStart}
+          onWorkerComplete={workerComplete}
+          onSellStock={sellStock}
+          onCollectStock={collectStock}
+          onDepositStock={depositStock}
         />
       </div>
       {!ready && (
@@ -586,12 +805,17 @@ export default function App() {
         </div>
       )}
       <header className="game-hud">
-        <div className="harbor-brand">
-          <Fish size={32} strokeWidth={2.8} />
+        <button
+          className="harbor-brand workplace-button"
+          aria-label="Workplaces"
+          onClick={() => open("workplaces")}
+        >
+          <Signpost size={32} strokeWidth={2.8} />
+          <small className="workplace-label">MAP</small>
           <span>
             FROST <small>&</small> FIN
           </span>
-        </div>
+        </button>
         <div
           className={`money-board ${coinFlash ? "cash-flash" : ""}`}
           aria-label={`${pretty(game.coins)} cash`}
@@ -645,7 +869,13 @@ export default function App() {
             </i>
           </span>
           <h1>{objective.title}</h1>
-          <p>{objective.detail}</p>
+          <p className={work.busy ? "active-work-status" : ""}>
+            {recentBuild
+              ? `Built: ${recentBuild}`
+              : work.busy
+                ? work.label
+                : objective.detail}
+          </p>
         </div>
         <button
           className="objective-go"
@@ -659,31 +889,26 @@ export default function App() {
           <ArrowRight size={24} strokeWidth={3} />
         </button>
       </section>
-      <div
-        className={`work-readout ${work.busy ? "working" : ""}`}
-        aria-live="polite"
-      >
-        <span>{work.busy ? <Hammer size={18} /> : <MouseHint />}</span>
-        <strong>{work.label || "Tap a tree, fish or workbench"}</strong>
-        {work.busy && (
-          <div className="work-progress">
-            <i
-              style={{
-                width: `${Math.max(0, Math.min(1, work.progress)) * 100}%`,
-              }}
-            />
-          </div>
-        )}
-      </div>
-      {recentBuild && (
-        <div className="build-announcement">
-          <Hammer size={30} />
-          <div>
-            <small>BUILT ON YOUR DOCK</small>
-            <strong>{recentBuild}</strong>
-          </div>
+      {work.busy && (
+        <div className="top-work-progress" aria-label="Work progress">
+          <i
+            style={{
+              width: `${Math.max(0, Math.min(1, work.progress)) * 100}%`,
+            }}
+          />
         </div>
       )}
+      <button
+        className={`stock-badge ${stockCount(game) > 0 ? "stock-ready" : ""}`}
+        aria-label="Open warehouse"
+        onClick={() => open("warehouse")}
+      >
+        <PackageCheck size={23} />
+        <span>
+          {stockCount(game)}
+          <small> STORED</small>
+        </span>
+      </button>
       <div className="activity-shortcuts" aria-label="Work on this dock">
         {(
           [
@@ -758,6 +983,27 @@ export default function App() {
               <Axe size={34} strokeWidth={2.6} />
             ) : work.id === "market" ? (
               <ShoppingBasket size={34} strokeWidth={2.6} />
+            ) : work.id === "crab" ||
+              work.id === "kelp" ||
+              work.id === "ore" ||
+              work.id === "ingots" ||
+              work.id === "meals" ||
+              work.id === "tackle" ? (
+              <ResourceArt
+                type={
+                  {
+                    crab: "crab",
+                    kelp: "kelp",
+                    ore: "ore",
+                    ingots: "ingot",
+                    meals: "meal",
+                    tackle: "tackle",
+                  }[work.id] as Resource
+                }
+                size={39}
+              />
+            ) : work.id === "warehouse" ? (
+              <PackageCheck size={34} strokeWidth={2.6} />
             ) : work.id === "steaks" || work.id === "planks" ? (
               <Hammer size={34} strokeWidth={2.6} />
             ) : (
@@ -776,7 +1022,8 @@ export default function App() {
           </span>
           <strong>BUILD</strong>
           <small>
-            {UPGRADES.filter((u) => game.upgrades[u.id] > 0).length}/12
+            {UPGRADES.filter((u) => game.upgrades[u.id] > 0).length}/
+            {UPGRADES.length}
           </small>
         </button>
         <button onClick={() => open("cargo")} aria-label="Cargo">
@@ -806,10 +1053,36 @@ export default function App() {
           <span>{notice}</span>
         </div>
       )}
+      {menu === "workplaces" && (
+        <Sheet
+          title="HARBOR WORKPLACES"
+          subtitle="New jobs along the shore and inland."
+          onClose={close}
+        >
+          <WorkplacesPanel
+            game={game}
+            onGo={go}
+            onBuild={openBuild}
+            onWarehouse={() => open("warehouse")}
+          />
+        </Sheet>
+      )}
+      {menu === "warehouse" && (
+        <Sheet
+          title="WAREHOUSE"
+          subtitle="Deliveries, supplies, and goods ready to sell."
+          onClose={close}
+        >
+          <WarehousePanel
+            game={game}
+            onTransfer={(direction) => go("warehouse", direction)}
+          />
+        </Sheet>
+      )}
       {menu === "build" && (
         <Sheet
           title="BUILD YOUR DOCK"
-          subtitle="Every upgrade changes something right here."
+          subtitle="Build industries across a larger, connected harbor."
           onClose={close}
         >
           <div className="sheet-cash">
@@ -818,7 +1091,7 @@ export default function App() {
             <span>CASH TO BUILD</span>
           </div>
           <div className="build-tabs" role="tablist" aria-label="Upgrade types">
-            {(["Yard", "Gear", "Crew"] as const).map((tab) => (
+            {(["Yard", "Industry", "Gear", "Crew"] as const).map((tab) => (
               <button
                 key={tab}
                 role="tab"
@@ -827,6 +1100,8 @@ export default function App() {
               >
                 {tab === "Yard" ? (
                   <Store size={21} />
+                ) : tab === "Industry" ? (
+                  <Hammer size={21} />
                 ) : tab === "Gear" ? (
                   <Axe size={21} />
                 ) : (
@@ -837,6 +1112,13 @@ export default function App() {
             ))}
           </div>
           <div className="sheet-scroll upgrade-list">
+            {category === "Crew" && (
+              <CrewOverview
+                game={game}
+                onBuild={openBuild}
+                onWarehouse={() => open("warehouse")}
+              />
+            )}
             {UPGRADES.filter((u) => groupFor(u.id) === category).map(
               (upgrade) => {
                 const current = game.upgrades[upgrade.id],
@@ -865,7 +1147,16 @@ export default function App() {
                         ))}
                       </div>
                       <p>
-                        <b>{visualStages[upgrade.id][Math.min(current, 4)]}</b>
+                        <b>
+                          {
+                            visualStages[upgrade.id][
+                              Math.min(
+                                current,
+                                visualStages[upgrade.id].length - 1,
+                              )
+                            ]
+                          }
+                        </b>
                         <br />
                         {upgradeEffect(
                           upgrade.id,
@@ -972,10 +1263,14 @@ export default function App() {
               <div className="worker-share">
                 <Users size={24} />
                 <div>
-                  <strong>Dock crew earnings</strong>
-                  <span>
-                    {pretty(game.workersStored)} cash waiting at the market
-                  </span>
+                  <strong>{stockCount(game)} goods in your warehouse</strong>
+                  <span>Workers gather, process, and deliver supplies.</span>
+                  <button
+                    className="open-stock"
+                    onClick={() => open("warehouse")}
+                  >
+                    Open storage <ArrowRight size={18} />
+                  </button>
                 </div>
               </div>
             )}
@@ -1192,15 +1487,13 @@ export default function App() {
                   const text = await file.text(),
                     data = JSON.parse(text);
                   if (
-                    ![1, 2].includes(data.version) ||
+                    ![1, 2, 3].includes(data.version) ||
                     !data.inventory ||
                     !data.upgrades
                   )
                     throw Error();
                   const next = loadGame(text);
-                  stateRef.current = next;
-                  setGame(next);
-                  setName(next.playerName);
+                  restoreHarbor(next);
                   notify("Welcome back, captain. Save restored.");
                 } catch {
                   notify("Could not load that save. Your dock is safe.");
@@ -1222,10 +1515,7 @@ export default function App() {
                     return;
                   }
                   const next = createInitialState();
-                  stateRef.current = next;
-                  setGame(next);
-                  setName(next.playerName);
-                  close();
+                  restoreHarbor(next);
                   go("wood");
                   notify("Fresh snow. Fresh start.");
                 }}
@@ -1269,9 +1559,19 @@ export default function App() {
                 text: "Choose Market. Carry your goods to the counter, watch the sale and collect your cash.",
               },
               {
+                icon: <Signpost size={30} />,
+                title: "EXPLORE YOUR HARBOR",
+                text: "Open MAP at the top left to visit crab pots, kelp beds, and the inland quarry. Build a forge, kitchen, and boathouse to make new products.",
+              },
+              {
+                icon: <PackageCheck size={30} />,
+                title: "KEEP YOUR CREW SUPPLIED",
+                text: "Your apprentice chops trees and carries logs to the warehouse. Hire specialists in BUILD → Crew. Drop off ingredients for them or collect their finished goods to sell. The porter at crew tier 5 serves stored goods to customers.",
+              },
+              {
                 icon: <Hammer size={31} />,
                 title: "BUILD UP THIS DOCK",
-                text: "Twelve upgrades, all in the starting area. New sawmills, smokehouses, nets, dockhands and better gear. Buy one and watch it change the world.",
+                text: "Nineteen upgrade tracks across the harbor. Build a forge, kitchen, boathouse, warehouse, and more. Buy one and watch it get built.",
               },
             ].map((step, index) => (
               <div className="help-step" key={step.title}>
@@ -1297,7 +1597,4 @@ export default function App() {
       )}
     </div>
   );
-}
-function MouseHint() {
-  return <span className="tap-hand">☝</span>;
 }

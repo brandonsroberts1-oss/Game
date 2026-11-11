@@ -10,8 +10,14 @@ import {
   Snowflake,
   Store,
   Users,
+  CookingPot,
+  Pickaxe,
+  Warehouse,
+  Leaf,
+  Wrench,
 } from "lucide-react";
 import type { Resource, UpgradeId } from "./game/model";
+import { BUILDING_ART, BUILDING_ATLAS_URL } from "./game/artAssets";
 
 export function CashArt({ size = 32 }: { size?: number }) {
   return (
@@ -66,6 +72,187 @@ export function ResourceArt({
     viewBox: "0 0 64 64",
     "aria-hidden": true as const,
   };
+  if (type === "crab")
+    return (
+      <svg {...props}>
+        <path
+          d="m19 31-12-7m11 13-13 1m15 5L9 51m37-20 12-7m-12 13 13 1m-15 5 11 8"
+          fill="none"
+          stroke="#9a493b"
+          strokeWidth="4"
+          strokeLinecap="round"
+        />
+        <path
+          d="M18 30C3 31 0 17 9 10l4 9 8-5c4 7 1 11-3 16Zm28 0c15 1 18-13 9-20l-4 9-8-5c-4 7-1 11 3 16Z"
+          fill="#e78062"
+          stroke="#7f493a"
+          strokeWidth="2.5"
+        />
+        <ellipse
+          cx="32"
+          cy="38"
+          rx="19"
+          ry="15"
+          fill="#d76d51"
+          stroke="#7e4237"
+          strokeWidth="2.5"
+        />
+        <path d="m23 26-2-9m20 9 2-9" stroke="#9b513d" strokeWidth="4" />
+        <circle cx="21" cy="17" r="4" fill="#fff5d0" />
+        <circle cx="43" cy="17" r="4" fill="#fff5d0" />
+        <circle cx="21" cy="17" r="2" fill="#354951" />
+        <circle cx="43" cy="17" r="2" fill="#354951" />
+        <path
+          d="M25 42c5 3 9 3 14 0"
+          stroke="#f1a284"
+          strokeWidth="2"
+          fill="none"
+        />
+      </svg>
+    );
+  if (type === "kelp")
+    return (
+      <svg {...props}>
+        <path
+          d="M31 58c-8-15 7-25 3-47m-8 34C9 42 9 29 14 24c12 1 17 11 12 21Zm9-16C29 15 39 6 49 7c4 13-2 21-14 22Zm-7 28C9 59 5 48 10 40c13-2 19 7 18 17Zm8-10c-1-15 10-21 20-15 0 12-7 18-20 15Z"
+          fill="#649661"
+          stroke="#3c6d54"
+          strokeWidth="2.5"
+          strokeLinejoin="round"
+        />
+        <path
+          d="m15 30 10 10m17-25-6 10m7 15-7 6"
+          stroke="#a4c17a"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  if (type === "ore")
+    return (
+      <svg {...props}>
+        <path
+          d="m7 38 8-24 26-7 17 20-8 26-25 7Z"
+          fill="#79949e"
+          stroke="#38566a"
+          strokeWidth="2.5"
+        />
+        <path d="m15 14 14 20 29-7-17-20Z" fill="#b0c2c9" />
+        <path d="m29 34-4 26 25-7 8-26Z" fill="#597c8e" />
+        <path
+          d="m19 25 10 9-6 13m17-25-6 11 7 8"
+          stroke="#d5a15f"
+          strokeWidth="5"
+          fill="none"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  if (type === "ingot")
+    return (
+      <svg {...props}>
+        <path
+          d="m11 23 27-9 16 8 5 24-29 12L5 45Z"
+          fill="#69889b"
+          stroke="#375368"
+          strokeWidth="2.5"
+        />
+        <path d="m11 23 22 10 21-11-16-8Z" fill="#d1e3e6" />
+        <path d="m33 33-3 25 29-12-5-24Z" fill="#91b1be" />
+        <path
+          d="m15 26 15 7m8-8 8-3"
+          stroke="#f2f6df"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+        <path d="m10 39 18 9" stroke="#a5c1c9" strokeWidth="2" />
+      </svg>
+    );
+  if (type === "meal")
+    return (
+      <svg {...props}>
+        <path
+          d="M8 30c2 25 46 29 49 0"
+          fill="#4f889c"
+          stroke="#315467"
+          strokeWidth="2.5"
+        />
+        <ellipse
+          cx="32"
+          cy="29"
+          rx="25"
+          ry="13"
+          fill="#f1dfb1"
+          stroke="#547b88"
+          strokeWidth="2.5"
+        />
+        <ellipse cx="32" cy="28" rx="20" ry="9" fill="#bd7744" />
+        <path
+          d="m19 25 9-4 9 7-10 4Z"
+          fill="#e89c7a"
+          stroke="#f2d9b0"
+          strokeWidth="2"
+        />
+        <path
+          d="m39 24 7 5-5 5m-22-1 7 2"
+          stroke="#83a55b"
+          strokeWidth="4"
+          fill="none"
+        />
+        <path
+          d="M23 13c-7-6 6-6 0-12m12 11c-5-5 5-6 0-11m10 15c-6-5 6-6 1-12"
+          fill="none"
+          stroke="#bdd5d7"
+          strokeWidth="3"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  if (type === "tackle")
+    return (
+      <svg {...props}>
+        <path
+          d="m7 28 29-8 21 8v23L29 60 7 50Z"
+          fill="#c1955c"
+          stroke="#644b34"
+          strokeWidth="2.5"
+        />
+        <path
+          d="m7 28 22 9 28-9-21-8Z"
+          fill="#6d9cac"
+          stroke="#496d7c"
+          strokeWidth="2"
+        />
+        <path
+          d="M22 24v-9c0-8 21-8 21 0v8"
+          stroke="#614c37"
+          strokeWidth="5"
+          fill="none"
+        />
+        <path
+          d="M29 37v23l28-9V28Z"
+          fill="#9e764b"
+          stroke="#644b34"
+          strokeWidth="2"
+        />
+        <rect
+          x="23"
+          y="35"
+          width="11"
+          height="10"
+          rx="2"
+          fill="#e6bf70"
+          stroke="#8f6e3c"
+          strokeWidth="1.5"
+        />
+        <path
+          d="m16 31 4-7 5 6m17-3 5-5 3 3"
+          stroke="#ecbd69"
+          strokeWidth="2"
+          fill="none"
+        />
+      </svg>
+    );
   if (type === "wood" || type === "plank")
     return (
       <svg {...props}>
@@ -290,6 +477,20 @@ export function UpgradeArt({
   type: UpgradeId;
   level?: number;
 }) {
+  const generated = BUILDING_ART[type];
+  if (generated && BUILDING_ATLAS_URL)
+    return (
+      <span
+        className="generated-building-art"
+        role="img"
+        aria-label={`${type} building`}
+        style={{
+          backgroundImage: `url(${BUILDING_ATLAS_URL})`,
+          backgroundSize: `${generated.columns * 100}% ${generated.rows * 100}%`,
+          backgroundPosition: `${(generated.column / (generated.columns - 1)) * 100}% ${(generated.row / (generated.rows - 1)) * 100}%`,
+        }}
+      />
+    );
   if (type === "cutter")
     return (
       <svg width="70" height="70" viewBox="0 0 80 80" aria-hidden="true">
@@ -383,21 +584,26 @@ export function UpgradeArt({
         />
       </svg>
     );
-  const Icon =
-    (
-      {
-        axe: Axe,
-        rod: Fish,
-        backpack: Backpack,
-        market: Store,
-        dock: ShipWheel,
-        crew: Users,
-        smokehouse: House,
-        freezer: Snowflake,
-        boots: Footprints,
-        nets: Network,
-      } as const
-    )[type as Exclude<UpgradeId, "cutter" | "sawmill">] || Hammer;
+  const icons: Partial<Record<UpgradeId, typeof Axe>> = {
+    axe: Axe,
+    rod: Fish,
+    backpack: Backpack,
+    market: Store,
+    dock: ShipWheel,
+    crew: Users,
+    smokehouse: House,
+    freezer: Snowflake,
+    boots: Footprints,
+    nets: Network,
+    crabpots: Fish,
+    kelpfarm: Leaf,
+    quarry: Pickaxe,
+    forge: Hammer,
+    kitchen: CookingPot,
+    boatyard: Wrench,
+    warehouse: Warehouse,
+  };
+  const Icon = icons[type] || Hammer;
   return (
     <span className={`illustrated-upgrade icon-${type} tier-${level}`}>
       <Icon size={43} strokeWidth={2.6} />

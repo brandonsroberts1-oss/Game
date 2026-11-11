@@ -23,6 +23,13 @@ import {
   DAILY_GOAL,
   RESOURCE_PRICES,
   RESOURCES,
+  WORKERS,
+  stockCount,
+  stockCapacity,
+  reservedStockCount,
+  workerJobSpec,
+  canWorkerStart,
+  resourceSaleValue,
 } from "./model.ts";
 import type { GameState, Resource } from "./model.ts";
 
@@ -40,14 +47,21 @@ function built(
   return { ...state, upgrades: { ...state.upgrades, ...upgrades } };
 }
 
-test("a new harbor starts empty with twelve five-stage starter upgrade tracks", () => {
+test("a new harbor starts empty with nineteen upgrade tracks and a free working forester", () => {
   const state = createInitialState();
-  assert.equal(state.version, 2);
+  assert.equal(state.version, 3);
   assert.equal(state.coins, 120);
   assert.equal(inventoryCount(state), 0);
   assert.equal(capacity(state), 24);
-  assert.equal(UPGRADES.length, 12);
-  assert.ok(UPGRADES.every((upgrade) => upgrade.maxLevel === 5));
+  assert.equal(UPGRADES.length, 19);
+  assert.ok(
+    UPGRADES.every(
+      (upgrade) => upgrade.maxLevel === (upgrade.id === "crew" ? 8 : 5),
+    ),
+  );
+  assert.equal(state.upgrades.crew, 1);
+  assert.equal(stockCount(state), 0);
+  assert.deepEqual(state.workerJobs, {});
   assert.ok(
     UPGRADES.filter((upgrade) => upgradeCost(upgrade.id, state) <= state.coins)
       .length >= 6,
@@ -183,10 +197,14 @@ test("selling empty packs gives no coins and selling goods pays exactly once", (
   assert.equal(reduceGame(state, { type: "sell" }), state);
 });
 
-test("all twelve starter tracks can purchase every stage, enforce cost, and stop at five", () => {
+test("all nineteen tracks purchase their documented stages and enforce maximum levels", () => {
   let state = { ...createInitialState(), coins: 1_000_000 };
   for (const upgrade of UPGRADES) {
-    for (let stage = 0; stage < 5; stage++) {
+    for (
+      let stage = state.upgrades[upgrade.id];
+      stage < upgrade.maxLevel;
+      stage++
+    ) {
       const cost = upgradeCost(upgrade.id, state);
       const before = state.coins;
       state = reduceGame(state, { type: "upgrade", id: upgrade.id });
@@ -239,7 +257,7 @@ test("crafted-goods and distinct starter-build quests record real progress and r
     claimed,
   );
   const buildQuest = QUESTS.find((quest) => quest.id === "better-together")!;
-  assert.equal(questProgress(buildQuest, built(initial, { axe: 5 })), 1);
+  assert.equal(questProgress(buildQuest, built(initial, { axe: 5 })), 2);
   assert.equal(
     questProgress(buildQuest, built(initial, { axe: 1, rod: 1, market: 1 })),
     3,
@@ -272,7 +290,7 @@ test("v1 migration preserves money, raw goods, upgrades, settings and claimed re
     workersStored: 7,
   };
   const migrated = loadGame(JSON.stringify(old), now);
-  assert.equal(migrated.version, 2);
+  assert.equal(migrated.version, 3);
   assert.equal(migrated.coins, old.coins);
   assert.equal(migrated.gems, old.gems);
   assert.equal(migrated.xp, old.xp);
@@ -297,41 +315,6 @@ test("v1 migration preserves money, raw goods, upgrades, settings and claimed re
     migrated.inventory,
   );
   assert.equal(inventoryCount(reduceGame(migrated, { type: "sell" })), 0);
-});
-
-test("worker income is absent without crew, capped at eight hours, and collectible only once", () => {
-  const now = Date.now();
-  const initial = createInitialState(now);
-  assert.equal(
-    reduceGame(initial, { type: "tick", now: now + 24 * 60 * 60 * 1000 })
-      .workersStored,
-    0,
-  );
-  const crew = built(initial, { crew: 2, dock: 3 });
-  assert.equal(workerRate(crew), 12);
-  const later = reduceGame(crew, {
-    type: "tick",
-    now: now + 24 * 60 * 60 * 1000,
-  });
-  assert.equal(later.workersStored, 12 * 60 * 8);
-  const collected = reduceGame(later, { type: "collectWorkers" });
-  assert.equal(collected.coins, crew.coins + later.workersStored);
-  assert.equal(reduceGame(collected, { type: "collectWorkers" }), collected);
-  assert.equal(
-    reduceGame(collected, { type: "tick", now: now + 24 * 60 * 60 * 1000 })
-      .workersStored,
-    0,
-  );
-});
-
-test("frequent ticks preserve fractional worker intervals, and offline loading applies earnings", () => {
-  const now = Date.now();
-  let state = built(createInitialState(now), { crew: 1, dock: 4 });
-  for (let second = 1; second <= 60; second++)
-    state = reduceGame(state, { type: "tick", now: now + second * 1000 });
-  assert.equal(state.workersStored, 7);
-  const loaded = loadGame(serializeGame(state), now + 60 * 60 * 1000);
-  assert.equal(loaded.workersStored, 420);
 });
 
 test("daily goals enforce both requirements, pay once, and reset at UTC midnight", () => {
@@ -362,7 +345,7 @@ test("versioned saves round-trip and malformed values, resource ids and upgrade 
   const now = Date.now();
   const initial = createInitialState(now);
   assert.deepEqual(loadGame(serializeGame(initial), now), initial);
-  for (const raw of ["{", "null", "[]", '{"version":3}', "{}"])
+  for (const raw of ["{", "null", "[]", '{"version":99}', "{}"])
     assert.deepEqual(loadGame(raw, now), initial);
   const dirty = {
     ...initial,
@@ -404,4 +387,354 @@ test("reset is deterministic and reuses the current clock anchor", () => {
   const initial = createInitialState(now);
   const changed = reduceGame(initial, { type: "harvest", resource: "wood" });
   assert.deepEqual(reduceGame(changed, { type: "reset" }), initial);
+});
+
+test("new raw activities and three additional production chains are real, gated, and profitable", () => {
+  const initial = createInitialState();
+  for (const resource of ["crab", "kelp", "ore"] as const) {
+    const gathered = reduceGame(initial, { type: "harvest", resource });
+    assert.ok(gathered.inventory[resource] > 0);
+    assert.equal(gathered.gathered[resource], gathered.inventory[resource]);
+  }
+  const ingredients = pack(initial, {
+    ore: 3,
+    wood: 1,
+    steak: 1,
+    kelp: 1,
+    plank: 2,
+    ingot: 1,
+  });
+  for (const recipe of ["ingots", "meals", "tackle"] as const)
+    assert.equal(processBlockReason(ingredients, recipe), "locked");
+  const unlocked = built(ingredients, { forge: 1, kitchen: 1, boatyard: 1 });
+  const iron = reduceGame(unlocked, { type: "process", recipe: "ingots" });
+  assert.equal(iron.inventory.ore, 0);
+  assert.equal(iron.inventory.wood, 0);
+  assert.equal(iron.inventory.ingot, 3);
+  const meals = reduceGame(iron, { type: "process", recipe: "meals" });
+  assert.equal(meals.inventory.meal, 2);
+  assert.equal(meals.inventory.steak, 0);
+  assert.equal(meals.inventory.kelp, 0);
+  const tackle = reduceGame(meals, { type: "process", recipe: "tackle" });
+  assert.equal(tackle.inventory.tackle, 2);
+  assert.equal(tackle.inventory.plank, 0);
+  assert.equal(tackle.inventory.ingot, 2);
+  assert.equal(
+    reduceGame(tackle, { type: "process", recipe: "tackle" }),
+    tackle,
+  );
+});
+
+test("worker deliveries require a real reserved job, its finished timestamp, and cannot be duplicated", () => {
+  const now = Date.parse("2026-11-09T15:00:00Z"),
+    initial = createInitialState(now);
+  assert.equal(WORKERS.length, 8);
+  assert.equal(workerJobSpec(initial, "fisher"), null);
+  assert.equal(workerJobSpec(initial, "porter"), null);
+  assert.equal(
+    reduceGame(initial, {
+      type: "workerComplete",
+      role: "forester",
+      now: now + 10_000,
+    }),
+    initial,
+  );
+  const start = reduceGame(initial, {
+    type: "workerStart",
+    role: "forester",
+    now,
+  });
+  assert.ok(start.workerJobs.forester);
+  assert.equal(stockCount(start), 0);
+  assert.equal(reservedStockCount(start), 6);
+  assert.equal(
+    reduceGame(start, { type: "workerStart", role: "forester", now }),
+    start,
+  );
+  assert.equal(
+    reduceGame(start, {
+      type: "workerComplete",
+      role: "forester",
+      now: now + 4249,
+    }),
+    start,
+  );
+  const finish = reduceGame(start, {
+    type: "workerComplete",
+    role: "forester",
+    now: now + 4250,
+  });
+  assert.equal(finish.stock.wood, 6);
+  assert.equal(inventoryCount(finish), 0);
+  assert.equal(finish.workerJobs.forester, undefined);
+  assert.equal(finish.coins, initial.coins);
+  assert.equal(
+    finish.gathered.wood,
+    0,
+    "the apprentice does not complete the captain tutorial",
+  );
+  assert.equal(
+    reduceGame(finish, {
+      type: "workerComplete",
+      role: "forester",
+      now: now + 20_000,
+    }),
+    finish,
+  );
+});
+
+test("processing workers reserve actual warehouse inputs and deliver their outputs only once", () => {
+  const now = Date.now(),
+    initial = built(createInitialState(now), { crew: 3, cutter: 1 });
+  assert.equal(canWorkerStart(initial, "cutter"), false);
+  const supplied = { ...initial, stock: { ...initial.stock, fish: 1 } };
+  const started = reduceGame(supplied, {
+    type: "workerStart",
+    role: "cutter",
+    now,
+  });
+  assert.equal(started.stock.fish, 0);
+  assert.equal(started.stock.steak, 0);
+  assert.equal(started.workerJobs.cutter?.outputs.steak, 4);
+  const finish = reduceGame(started, {
+    type: "workerComplete",
+    role: "cutter",
+    now: now + 10_000,
+  });
+  assert.equal(finish.stock.steak, 4);
+  assert.equal(finish.stock.fish, 0);
+  assert.equal(finish.processed.steaks, 0);
+  assert.equal(
+    reduceGame(finish, {
+      type: "workerStart",
+      role: "cutter",
+      now: now + 10_000,
+    }),
+    finish,
+  );
+  const noMachine = {
+    ...supplied,
+    upgrades: { ...supplied.upgrades, cutter: 0 },
+  };
+  assert.equal(canWorkerStart(noMachine, "cutter"), false);
+});
+
+test("worker output reservations prevent overfilling and unfinished deliveries wait safely for storage", () => {
+  const now = Date.now(),
+    initial = createInitialState(now);
+  const full = { ...initial, stock: { ...initial.stock, wood: 149 } };
+  assert.equal(stockCapacity(full), 150);
+  assert.equal(canWorkerStart(full, "forester"), false);
+  const started = reduceGame(initial, {
+    type: "workerStart",
+    role: "forester",
+    now,
+  });
+  const crowded = { ...started, stock: { ...started.stock, wood: 149 } };
+  assert.equal(
+    reduceGame(crowded, {
+      type: "workerComplete",
+      role: "forester",
+      now: now + 10_000,
+    }),
+    crowded,
+  );
+  const freed = reduceGame(crowded, { type: "takeStock" });
+  const delivered = reduceGame(freed, {
+    type: "workerComplete",
+    role: "forester",
+    now: now + 10_000,
+  });
+  assert.equal(delivered.stock.wood, 131);
+  assert.equal(inventoryCount(delivered), 24);
+  assert.equal(delivered.workerJobs.forester, undefined);
+  const almost = {
+    ...initial,
+    stock: { ...initial.stock, wood: 140 },
+    inventory: { ...initial.inventory, fish: 20 },
+  };
+  const reserved = reduceGame(almost, {
+    type: "workerStart",
+    role: "forester",
+    now,
+  });
+  const deposit = reduceGame(reserved, {
+    type: "depositStock",
+    resource: "fish",
+  });
+  assert.equal(deposit.stock.fish, 4);
+  assert.equal(deposit.inventory.fish, 16);
+  assert.equal(stockCount(deposit) + reservedStockCount(deposit), 150);
+});
+
+test("warehouse transfers preserve goods, prioritize crafted cargo, and respect both capacities", () => {
+  const initial = createInitialState();
+  const supplied = {
+    ...initial,
+    stock: { ...initial.stock, wood: 100, meal: 10, tackle: 4 },
+  };
+  const taken = reduceGame(supplied, { type: "takeStock" });
+  assert.equal(taken.inventory.tackle, 4);
+  assert.equal(taken.inventory.meal, 10);
+  assert.equal(taken.inventory.wood, 10);
+  assert.equal(inventoryCount(taken), 24);
+  assert.equal(stockCount(taken) + inventoryCount(taken), stockCount(supplied));
+  assert.equal(reduceGame(taken, { type: "takeStock" }), taken);
+  const restored = reduceGame(taken, { type: "depositStock" });
+  assert.deepEqual(restored.stock, supplied.stock);
+  assert.equal(inventoryCount(restored), 0);
+  const onlyWood = reduceGame(supplied, {
+    type: "takeStock",
+    resource: "wood",
+  });
+  assert.equal(onlyWood.inventory.wood, 24);
+  assert.equal(onlyWood.stock.meal, 10);
+  assert.equal(
+    reduceGame(supplied, { type: "depositStock", quantity: -1 }),
+    supplied,
+  );
+});
+
+test("customer stock sales require available goods and pay their exact enhanced value once", () => {
+  const initial = built(createInitialState(), {
+    market: 2,
+    dock: 1,
+    freezer: 1,
+  });
+  assert.equal(
+    reduceGame(initial, { type: "sellStock", resource: "crab", quantity: 1 }),
+    initial,
+  );
+  const supplied = { ...initial, stock: { ...initial.stock, crab: 2 } };
+  const value = resourceSaleValue(supplied, "crab", 2),
+    sold = reduceGame(supplied, {
+      type: "sellStock",
+      resource: "crab",
+      quantity: 2,
+    });
+  assert.equal(sold.stock.crab, 0);
+  assert.equal(sold.coins, supplied.coins + value);
+  assert.equal(sold.trades, 1);
+  assert.equal(sold.earned, value);
+  assert.equal(sold.daily.earned, value);
+  assert.equal(
+    reduceGame(sold, { type: "sellStock", resource: "crab", quantity: 2 }),
+    sold,
+  );
+  for (const quantity of [0, -1, NaN, Infinity, 0.5])
+    assert.equal(
+      reduceGame(supplied, { type: "sellStock", resource: "crab", quantity }),
+      supplied,
+    );
+});
+
+test("active ticks never pay phantom wages or generate worker goods", () => {
+  const now = Date.now(),
+    initial = built(createInitialState(now), { crew: 8, dock: 5 });
+  const ticked = reduceGame(initial, {
+    type: "tick",
+    now: now + 24 * 60 * 60 * 1000,
+  });
+  assert.equal(ticked.coins, initial.coins);
+  assert.equal(ticked.workersStored, 0);
+  assert.equal(stockCount(ticked), 0);
+  const legacy = { ...initial, workersStored: 25 };
+  const collected = reduceGame(legacy, { type: "collectWorkers" });
+  assert.equal(collected.coins, legacy.coins + 25);
+  assert.equal(reduceGame(collected, { type: "collectWorkers" }), collected);
+});
+
+test("offline work waits a minute, fills bounded stock, caps at eight hours, and is not replayed on reload", () => {
+  const now = Date.parse("2026-11-09T00:00:00Z"),
+    initial = createInitialState(now);
+  assert.equal(stockCount(loadGame(serializeGame(initial), now + 59_999)), 0);
+  const oneMinute = loadGame(serializeGame(initial), now + 60_000);
+  assert.equal(oneMinute.stock.wood, 6);
+  assert.equal(oneMinute.coins, 120);
+  assert.equal(stockCount(loadGame(serializeGame(oneMinute), now + 60_000)), 6);
+  const rich = built(initial, {
+    crew: 8,
+    cutter: 1,
+    quarry: 1,
+    kelpfarm: 1,
+    crabpots: 1,
+    kitchen: 1,
+    warehouse: 5,
+    dock: 5,
+  });
+  const eight = loadGame(serializeGame(rich), now + 8 * 60 * 60 * 1000),
+    day = loadGame(serializeGame(rich), now + 24 * 60 * 60 * 1000);
+  assert.equal(eight.coins, day.coins);
+  assert.deepEqual(eight.stock, day.stock);
+  assert.ok(eight.coins > rich.coins);
+  assert.ok(stockCount(eight) <= stockCapacity(eight));
+  assert.equal(eight.workersStored, 0);
+  assert.equal(day.lastSaved, now + 24 * 60 * 60 * 1000);
+  assert.deepEqual(
+    loadGame(serializeGame(eight), now + 8 * 60 * 60 * 1000),
+    eight,
+  );
+});
+
+test("reserved jobs survive reload, deliver once offline, and do not consume their inputs twice", () => {
+  const now = Date.now(),
+    initial = built(createInitialState(now), { crew: 3, cutter: 1 });
+  const supplied = { ...initial, stock: { ...initial.stock, fish: 1 } };
+  const started = reduceGame(supplied, {
+    type: "workerStart",
+    role: "cutter",
+    now,
+  });
+  const early = loadGame(serializeGame(started), now + 1000);
+  assert.equal(early.stock.fish, 0);
+  assert.equal(early.stock.steak, 0);
+  assert.ok(early.workerJobs.cutter);
+  const done = loadGame(serializeGame(early), now + 10_000);
+  assert.equal(done.stock.steak, 4);
+  assert.equal(done.stock.fish, 0);
+  assert.equal(done.workerJobs.cutter, undefined);
+  const twice = loadGame(serializeGame(done), now + 10_000);
+  assert.deepEqual(twice.stock, done.stock);
+});
+
+test("v2 migration preserves existing goods and cash while supplying a free apprentice and new stock schema", () => {
+  const now = Date.now(),
+    old = {
+      ...createInitialState(now),
+      version: 2,
+      coins: 4321,
+      inventory: {
+        wood: 40,
+        fish: 2,
+        salmon: 1,
+        steak: 4,
+        plank: 3,
+        smoked: 2,
+      },
+      upgrades: {
+        axe: 2,
+        rod: 3,
+        backpack: 2,
+        cutter: 1,
+        sawmill: 1,
+        market: 2,
+        dock: 1,
+        crew: 0,
+        smokehouse: 1,
+        freezer: 1,
+        boots: 2,
+        nets: 2,
+      },
+      processed: { steaks: 12, planks: 4, smoked: 2 },
+    };
+  const migrated = loadGame(JSON.stringify(old), now);
+  assert.equal(migrated.version, 3);
+  assert.equal(migrated.coins, 4321);
+  assert.equal(migrated.upgrades.crew, 1);
+  assert.equal(migrated.upgrades.cutter, 1);
+  assert.equal(migrated.inventory.wood, 40);
+  assert.equal(migrated.inventory.steak, 4);
+  assert.equal(migrated.inventory.ore, 0);
+  assert.equal(stockCount(migrated), 0);
+  assert.deepEqual(migrated.workerJobs, {});
 });

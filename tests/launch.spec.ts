@@ -17,6 +17,9 @@ test.beforeAll(async () => {
     ".js": "text/javascript",
     ".css": "text/css",
     ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".webp": "image/webp",
     ".woff": "font/woff",
     ".woff2": "font/woff2",
   };
@@ -77,12 +80,38 @@ async function assertWorldReady(page: Page) {
   await expect
     .poll(() => page.locator("canvas").getAttribute("data-phase"))
     .not.toBeNull();
-  await expect.poll(async () => (await readSave(page)).version).toBe(2);
+  await expect.poll(async () => (await readSave(page)).version).toBe(3);
+  await expect
+    .poll(
+      () => page.locator("canvas").getAttribute("data-generated-materials"),
+      { timeout: 60_000 },
+    )
+    .toBe("true");
+  await expect(page.locator(".game-loading")).toHaveCount(0, {
+    timeout: 60_000,
+  });
   await page.evaluate(() => document.fonts.ready);
 }
-async function readSave(
-  page: Page,
-): Promise<{
+
+async function assertBuildingArtReady(page: Page) {
+  await page.getByRole("button", { name: "Build", exact: true }).click();
+  await page.getByRole("tab", { name: "Industry", exact: true }).click();
+  const art = page.locator(".generated-building-art").first();
+  await expect(art).toBeVisible();
+  const dimensions = await art.evaluate(async (element) => {
+    const background = getComputedStyle(element).backgroundImage;
+    if (!background.startsWith("url("))
+      throw new Error("Generated building art has no image URL");
+    const image = new Image();
+    image.src = background.slice(4, -1).replace(/^["']|["']$/g, "");
+    await image.decode();
+    return { width: image.naturalWidth, height: image.naturalHeight };
+  });
+  expect(dimensions.width).toBeGreaterThan(1000);
+  expect(dimensions.height).toBeGreaterThan(1000);
+  await page.getByRole("button", { name: "Close menu", exact: true }).click();
+}
+async function readSave(page: Page): Promise<{
   version: number;
   coins: number;
   inventory: Record<string, number>;
@@ -113,6 +142,13 @@ function observeLaunch(page: Page) {
     badResponses: string[] = [],
     requests: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  page.on("console", (message) => {
+    if (
+      message.type() === "error" &&
+      /THREE\.WebGLProgram|shader error/i.test(message.text())
+    )
+      errors.push(message.text());
+  });
   page.on("request", (request) => requests.push(request.url()));
   page.on("requestfailed", (request) =>
     failures.push(`${request.url()} ${request.failure()?.errorText}`),
@@ -143,6 +179,7 @@ test("production build under /Game/ gathers, physically sells, and builds with a
     .poll(async () => (await readSave(page)).coins, { timeout: 60_000 })
     .toBeGreaterThan(initial.coins);
   await buyAxe(page);
+  await assertBuildingArtReady(page);
   expect(
     observed.requests.filter(
       (url) =>
@@ -184,6 +221,7 @@ async function exerciseOfflineGame(
   await assertWorldReady(page);
   expect((await readSave(page)).coins).toBe(saved.coins);
   expect((await readSave(page)).upgrades.axe).toBe(1);
+  await assertBuildingArtReady(page);
   expect(
     observed.requests.filter((url) => /^https?:/.test(url) && url !== entry),
   ).toEqual([]);

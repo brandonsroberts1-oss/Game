@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import type { UpgradeId, Resource, GameState } from "./model";
+import type { UpgradeId, Resource, GameState, ActivityId } from "./model";
+import { createGeneratedMaterials } from "./artAssets";
 
 export interface TreeNode {
   group: THREE.Group;
@@ -12,6 +13,13 @@ export interface TreeNode {
   state: "standing" | "fallen" | "growing";
   regrowAt: number;
   originalScale: number;
+}
+export interface PersonRig {
+  root: THREE.Group;
+  leftArm: THREE.Group;
+  rightArm: THREE.Group;
+  legs: THREE.Group[];
+  cargo?: THREE.Group;
 }
 export interface Station {
   group: THREE.Group;
@@ -32,7 +40,12 @@ export interface World {
   trees: TreeNode[];
   fish: THREE.Group[];
   customers: THREE.Group[];
-  stations: Record<"fish" | "steaks" | "planks" | "smoked" | "market", Station>;
+  stations: Record<Exclude<ActivityId, "wood">, Station>;
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
+  workerTree: TreeNode;
+  createPerson: (parent: THREE.Object3D, coat: string) => PersonRig;
+  activityProps: Record<string, THREE.Object3D>;
+  ready: Promise<boolean>;
   cutter: {
     cleaver: THREE.Group;
     blade: THREE.Group;
@@ -41,6 +54,8 @@ export interface World {
     conveyor: THREE.Group;
     fish: THREE.Group;
     steaks: THREE.Group[];
+    setCutProgress: (progress: number, amount: number) => void;
+    reset: () => void;
   };
   upgradeGroups: Record<UpgradeId, THREE.Group[]>;
   smokePuffs: THREE.Mesh[];
@@ -54,6 +69,9 @@ export interface World {
 
 /** The entire playable yard is assembled here; no downloads or texture services. */
 export function createWorld(): World {
+  const generated = createGeneratedMaterials();
+  const bounds = { minX: -7.05, maxX: 27, minZ: -22, maxZ: 25 };
+  const activityProps: Record<string, THREE.Object3D> = {};
   const scene = new THREE.Scene();
   scene.background = new THREE.Color("#c7deea");
   scene.fog = new THREE.Fog("#c7deea", 50, 115);
@@ -198,34 +216,7 @@ export function createWorld(): World {
     shore.position.set(x, -0.24, 0);
     scene.add(shore);
   }
-  const woodCanvas = document.createElement("canvas");
-  woodCanvas.width = woodCanvas.height = 256;
-  const woodCtx = woodCanvas.getContext("2d")!;
-  woodCtx.fillStyle = "#bd8b71";
-  woodCtx.fillRect(0, 0, 256, 256);
-  for (let i = 0; i < 16; i++) {
-    woodCtx.fillStyle =
-      i % 3 === 0 ? "#b7846c" : i % 3 === 1 ? "#bd8c73" : "#c4947a";
-    woodCtx.fillRect(0, i * 16, 256, 15);
-    woodCtx.fillStyle = "rgba(88,52,34,.19)";
-    woodCtx.fillRect(0, i * 16, 256, 1);
-    for (let j = 0; j < 9; j++) {
-      woodCtx.strokeStyle = "rgba(111,71,45,.065)";
-      woodCtx.beginPath();
-      const yy = i * 16 + random() * 14;
-      woodCtx.moveTo(random() * 230, yy);
-      woodCtx.lineTo(256, yy + random() * 2);
-      woodCtx.stroke();
-    }
-  }
-  const woodTexture = new THREE.CanvasTexture(woodCanvas);
-  woodTexture.colorSpace = THREE.SRGBColorSpace;
-  woodTexture.wrapS = woodTexture.wrapT = THREE.RepeatWrapping;
-  woodTexture.repeat.set(3, 3);
-  const floorMaterial = new THREE.MeshStandardMaterial({
-    map: woodTexture,
-    roughness: 1,
-  });
+  const floorMaterial = generated.wood;
   box(scene, "#a37153", [1.05, 0.13, 2.65], [12.9, 0.5, 11.7]);
   const floor = new THREE.Mesh(
     new THREE.BoxGeometry(12.9, 0.055, 11.7),
@@ -279,90 +270,155 @@ export function createWorld(): World {
     x >= -6.48 - dockLevel * 0.43 &&
     x <= -4.7 &&
     Math.abs(z - 1) <= 0.84 + dockLevel * 0.06;
+  const deckFootprints = [
+    { x: 12, z: 6, w: 9, d: 7 },
+    { x: 11, z: 12, w: 9, d: 5 },
+    { x: 19, z: 16, w: 9, d: 7 },
+    { x: 15, z: -5, w: 7, d: 6 },
+    { x: 9, z: 5, w: 5, d: 2.4 },
+    { x: 13, z: 9.6, w: 2.4, d: 6 },
+    { x: 16.8, z: 13.8, w: 8.5, d: 2.4 },
+    { x: 13, z: -8.8, w: 3, d: 6 },
+    { x: 5, z: -6.5, w: 14, d: 2.1 },
+  ];
   const groundHeight = (x: number, z: number) =>
-    onDock(x, z) || (x >= -5.55 && x <= 7.65 && z >= -3.3 && z <= 8.75)
-      ? 0.4
-      : 0.35;
+    deckFootprints.some(
+      (d) => Math.abs(x - d.x) <= d.w / 2 && Math.abs(z - d.z) <= d.d / 2,
+    )
+      ? 0.438
+      : onDock(x, z) || (x >= -5.55 && x <= 7.65 && z >= -3.3 && z <= 8.75)
+        ? 0.4
+        : 0.35;
   // All reusable cargo items have true volume and distinct silhouettes.
-  function makeFish(smoked = false) {
-    const g = new THREE.Group(),
-      navy = smoked ? "#855b34" : "#123e87",
-      side = smoked ? "#c59a59" : "#69b8d6";
-    ball(g, side, [0, 0.025, 0], [0.48, 0.32, 1.45]);
-    ball(g, navy, [0, 0.2, -0.08], [0.33, 0.185, 1.35]);
-    ball(g, side, [0, -0.065, 0.12], [0.465, 0.255, 1.29]);
-    ball(
-      g,
-      smoked ? "#d5b782" : "#e3eff1",
-      [0, -0.17, 0.17],
-      [0.39, 0.15, 1.14],
+  function bodyRadius(z: number) {
+    const t = THREE.MathUtils.clamp((z + 1.4) / 2.95, 0, 1);
+    return (
+      0.035 + Math.pow(Math.sin(t * Math.PI), 0.72) * 0.43 * (0.85 + 0.15 * t)
     );
+  }
+  function fishBodyGeometry(from = -1.4, to = 1.55) {
+    const points: THREE.Vector2[] = [];
+    for (let i = 0; i <= 28; i++) {
+      const z = from + ((to - from) * i) / 28;
+      points.push(new THREE.Vector2(bodyRadius(z), z));
+    }
+    const geometry = new THREE.LatheGeometry(points, 36);
+    geometry.rotateX(Math.PI / 2);
+    geometry.scale(1, 0.77, 1);
+    const uv = geometry.attributes.uv as THREE.BufferAttribute;
+    for (let i = 0; i < uv.count; i++)
+      uv.setY(i, (from + 1.4 + (to - from) * uv.getY(i)) / 2.95);
+    return geometry;
+  }
+  function fin(
+    parent: THREE.Object3D,
+    points: THREE.Vector2[],
+    color: string,
+    position: THREE.Vector3,
+    rotation: THREE.Euler,
+  ) {
+    const shape = new THREE.Shape(points);
+    const mesh = new THREE.Mesh(
+      new THREE.ExtrudeGeometry(shape, {
+        depth: 0.025,
+        bevelEnabled: true,
+        bevelSize: 0.012,
+        bevelThickness: 0.012,
+        bevelSegments: 1,
+        steps: 1,
+      }),
+      material(color, 0.15),
+    );
+    mesh.position.copy(position);
+    mesh.rotation.copy(rotation);
+    mesh.castShadow = true;
+    parent.add(mesh);
+    return mesh;
+  }
+  function makeFish(smoked = false) {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(
+      fishBodyGeometry(),
+      smoked ? material("#a97443") : generated.tunaSkin,
+    );
+    body.name = "fish-body";
+    body.castShadow = true;
+    body.receiveShadow = true;
+    g.add(body);
+    const belly = ball(
+      g,
+      smoked ? "#c9a66e" : "#d6e3df",
+      [0, -0.245, 0.1],
+      [0.31, 0.09, 1.09],
+    );
+    belly.name = "fish-belly";
+    const navy = smoked ? "#6d4729" : "#19374d";
     for (const sign of [-1, 1]) {
-      const eye = cylinder(
+      const eye = ball(
         g,
-        "#eff1d7",
-        [sign * 0.355, 0.09, 1.02],
-        [0.125, 0.045, 0.125],
-        0.3,
+        "#27231e",
+        [sign * 0.253, 0.07, 1.05],
+        [0.041, 0.041, 0.025],
       );
-      eye.rotation.z = Math.PI / 2;
-      const pupil = cylinder(
-        g,
-        "#0c243a",
-        [sign * 0.383, 0.09, 1.02],
-        [0.075, 0.055, 0.075],
-      );
-      pupil.rotation.z = Math.PI / 2;
-      ball(g, "#ffffff", [sign * 0.412, 0.12, 1.045], [0.02, 0.028, 0.028]);
-      const fin = box(g, navy, [sign * 0.53, -0.04, 0.05], [0.64, 0.04, 0.2]);
-      fin.rotation.y = sign * 0.58;
+      eye.name = "fish-eye";
+      ball(g, "#c7d8d4", [sign * 0.267, 0.086, 1.061], [0.01, 0.012, 0.009]);
       const gill = new THREE.Mesh(
-        new THREE.TorusGeometry(0.22, 0.018, 4, 12, Math.PI * 0.8),
-        material(smoked ? "#986d43" : "#3a829f"),
+        new THREE.TorusGeometry(0.19, 0.009, 5, 18, Math.PI * 0.83),
+        material(smoked ? "#9b6939" : "#427184", 0.2),
       );
-      gill.rotation.y = (sign * Math.PI) / 2;
-      gill.rotation.z = -0.8;
-      gill.position.set(sign * 0.44, -0.02, 0.71);
+      gill.rotation.set(0, (sign * Math.PI) / 2, -0.6);
+      gill.position.set(sign * 0.34, -0.03, 0.71);
+      gill.name = "fish-gill";
       g.add(gill);
-      for (let i = 0; i < 4; i++)
+      fin(
+        g,
+        [
+          new THREE.Vector2(0, 0),
+          new THREE.Vector2(sign * 0.62, -0.18),
+          new THREE.Vector2(sign * 0.19, 0.16),
+        ],
+        navy,
+        new THREE.Vector3(sign * 0.26, -0.05, 0.45),
+        new THREE.Euler(Math.PI / 2, 0, sign * 0.12),
+      );
+      for (let i = 0; i < 5; i++)
         shape(
           g,
           cone,
-          smoked ? "#dcbd73" : "#e7c653",
-          [sign * 0.19, 0.18, -0.7 - i * 0.13],
-          [0.035, 0.11, 0.035],
+          "#d8be59",
+          [sign * 0.1, 0.11, -0.64 - i * 0.11],
+          [0.025, 0.085, 0.035],
         );
     }
-    const finShape = new THREE.Shape([
-      new THREE.Vector2(0, 0),
-      new THREE.Vector2(0.7, 0),
-      new THREE.Vector2(0.12, 0.56),
-    ]);
-    const dorsal = new THREE.Mesh(
-      new THREE.ShapeGeometry(finShape),
-      new THREE.MeshStandardMaterial({ color: navy, side: THREE.DoubleSide }),
+    fin(
+      g,
+      [
+        new THREE.Vector2(0, 0),
+        new THREE.Vector2(0.58, 0),
+        new THREE.Vector2(0.15, 0.56),
+      ],
+      navy,
+      new THREE.Vector3(0, 0.22, -0.25),
+      new THREE.Euler(0, Math.PI / 2, 0),
     );
-    dorsal.rotation.y = Math.PI / 2;
-    dorsal.position.set(0, 0.23, -0.35);
-    g.add(dorsal);
-    const tail = group(g, 0, 0, -1.23);
+    const tail = group(g, 0, 0, -1.26);
     tail.name = "tail";
-    const tailShape = new THREE.Shape([
-      new THREE.Vector2(0, 0),
-      new THREE.Vector2(-0.7, -0.82),
-      new THREE.Vector2(0, -0.52),
-      new THREE.Vector2(0.7, -0.82),
-    ]);
-    const tailMesh = new THREE.Mesh(
-      new THREE.ExtrudeGeometry(tailShape, {
-        depth: 0.055,
-        bevelEnabled: false,
-      }),
-      material(navy),
+    fin(
+      tail,
+      [
+        new THREE.Vector2(0, 0),
+        new THREE.Vector2(-0.61, -0.63),
+        new THREE.Vector2(-0.22, -0.35),
+        new THREE.Vector2(0, -0.48),
+        new THREE.Vector2(0.22, -0.35),
+        new THREE.Vector2(0.61, -0.63),
+      ],
+      navy,
+      new THREE.Vector3(),
+      new THREE.Euler(Math.PI / 2, 0, 0),
     );
-    tailMesh.rotation.x = Math.PI / 2;
-    tail.add(tailMesh);
-    batchDetails(g);
+    const mouth = box(g, "#43545d", [0, -0.025, 1.5], [0.13, 0.018, 0.035]);
+    mouth.name = "fish-mouth";
     return g;
   }
   const fishTemplate = makeFish(),
@@ -404,21 +460,103 @@ export function createWorld(): World {
       for (let i = 0; i < 3; i++)
         box(g, "#805333", [-0.2 + i * 0.25, 0.14, 0], [0.02, 0.013, 0.13]);
     } else if (resource === "steak") {
-      cylinder(g, "#f4debe", [0, 0, 0], [0.24, 0.15, 0.24]);
-      cylinder(g, "#e2676e", [0, 0.082, 0], [0.211, 0.014, 0.211]);
-      cylinder(g, "#fff0ca", [0, 0.096, 0], [0.048, 0.018, 0.048]);
-      for (const a of [0.3, 2.4, 4.6]) {
-        const grain = box(
-          g,
-          "#f3b4a1",
-          [Math.cos(a) * 0.12, 0.094, Math.sin(a) * 0.12],
-          [0.13, 0.009, 0.014],
+      const side = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.32, 0.32, 0.22, 36, 1, true),
+        generated.tunaSkin,
+      );
+      side.castShadow = true;
+      g.add(side);
+      for (const sign of [-1, 1]) {
+        const face = new THREE.Mesh(
+          new THREE.CircleGeometry(0.315, 40),
+          generated.steakFace,
         );
-        grain.rotation.y = -a;
+        face.rotation.x = sign > 0 ? -Math.PI / 2 : Math.PI / 2;
+        face.position.y = sign * 0.113;
+        face.receiveShadow = true;
+        g.add(face);
       }
+    } else if (resource === "crab") {
+      ball(g, "#9f5739", [0, 0.08, 0], [0.29, 0.14, 0.22]);
+      for (const sign of [-1, 1]) {
+        for (let j = 0; j < 3; j++) {
+          const leg = box(
+            g,
+            "#ba6845",
+            [sign * 0.29, -0.01, -0.15 + j * 0.13],
+            [0.26, 0.045, 0.045],
+          );
+          leg.rotation.y = sign * (0.5 - j * 0.4);
+        }
+        const claw = group(g, sign * 0.27, 0.07, 0.24);
+        claw.name = "crab-claw";
+        ball(claw, "#bd6847", [0, 0, 0], [0.14, 0.08, 0.12]);
+        box(claw, "#e0a068", [sign * 0.06, 0, 0.12], [0.05, 0.06, 0.18]);
+      }
+      for (const x of [-0.1, 0.1])
+        ball(g, "#221e1b", [x, 0.2, 0.13], [0.025, 0.025, 0.025]);
+    } else if (resource === "kelp") {
+      for (let i = 0; i < 7; i++) {
+        const leaf = box(
+          g,
+          i % 2 ? "#3b6d48" : "#658a47",
+          [((i % 3) - 0.8) * 0.13, 0.08 + i * 0.025, 0],
+          [0.12, 0.06, 0.8 - i * 0.04],
+        );
+        leaf.rotation.y = i * 0.45;
+        leaf.rotation.z = (i - 3) * 0.08;
+      }
+      box(g, "#b2a174", [0, 0.19, 0], [0.09, 0.28, 0.25]);
+    } else if (resource === "ore") {
+      shape(
+        g,
+        new THREE.DodecahedronGeometry(0.3, 1),
+        "#627580",
+        [0, 0.05, 0],
+        [1.1, 0.8, 0.9],
+      );
+      for (let i = 0; i < 4; i++)
+        ball(
+          g,
+          "#adc7c9",
+          [-0.15 + i * 0.1, 0.25, Math.sin(i) * 0.1],
+          [0.065, 0.035, 0.05],
+        );
+    } else if (resource === "ingot") {
+      const bar = box(g, "#a5bbc4", [0, 0.07, 0], [0.65, 0.24, 0.29]);
+      bar.material = generated.metal;
+      box(g, "#e0c883", [0, 0.195, 0], [0.23, 0.015, 0.19]);
+    } else if (resource === "meal") {
+      cylinder(g, "#e6ddd0", [0, 0.05, 0], [0.3, 0.18, 0.3]);
+      cylinder(g, "#966c3a", [0, 0.15, 0], [0.25, 0.025, 0.25]);
+      for (let i = 0; i < 5; i++) {
+        ball(
+          g,
+          i % 2 ? "#bf7661" : "#83a751",
+          [Math.cos(i * 1.25) * 0.13, 0.18, Math.sin(i * 1.25) * 0.13],
+          [0.08, 0.05, 0.07],
+        );
+      }
+    } else if (resource === "tackle") {
+      box(g, "#416a7c", [0, 0.09, 0], [0.63, 0.33, 0.4]);
+      box(g, "#829e9c", [0, 0.27, 0], [0.67, 0.07, 0.44]);
+      box(g, "#d9b66b", [0, 0.16, 0.22], [0.1, 0.1, 0.03]);
+      const handle = new THREE.Mesh(
+        new THREE.TorusGeometry(0.12, 0.022, 6, 16, Math.PI),
+        material("#d3b374"),
+      );
+      handle.position.set(0, 0.31, 0);
+      g.add(handle);
     } else {
-      for (let i = 0; i < 2; i++)
-        box(g, i ? "#d5a773" : "#bd8c59", [0, i * 0.1, 0], [0.97, 0.09, 0.24]);
+      for (let i = 0; i < 2; i++) {
+        const plank = box(
+          g,
+          i ? "#d5a773" : "#bd8c59",
+          [0, i * 0.1, 0],
+          [0.97, 0.09, 0.24],
+        );
+        plank.material = generated.wood;
+      }
       box(g, "#ebc594", [0, 0.205, 0], [0.11, 0.02, 0.245]);
     }
     batchDetails(g);
@@ -493,6 +631,8 @@ export function createWorld(): World {
     ball(root, "#fbf9e9", [0, 1.86, 0], [0.09, 0.09, 0.09]);
     box(root, "#efaa75", [0, 1.24, 0.04], [0.53, 0.1, 0.44]);
     batchDetails(root);
+    root.userData.arms = arms;
+    root.userData.legs = legs;
     return { root, legs, leftArm: arms[0], rightArm: arms[1] };
   }
   const person = winterPerson(scene, teal),
@@ -562,6 +702,27 @@ export function createWorld(): World {
         [1.19 - i * 0.246, 1.57, 1.1 - i * 0.22],
       );
     }
+    // Uneven branch tips and snow pillows break the stacked-cone silhouette.
+    for (let i = 0; i < 9; i++) {
+      const a = i * 2.399,
+        r = 0.78 - (i % 3) * 0.14,
+        y = 1.25 + Math.floor(i / 3) * 0.72;
+      const branch = shape(
+        pivot,
+        cone,
+        i % 2 ? "#486f71" : "#52787b",
+        [Math.sin(a) * r, y, Math.cos(a) * r],
+        [0.42, 0.9, 0.39],
+      );
+      branch.rotation.z = Math.sin(a) * 0.27;
+      branch.rotation.x = Math.cos(a) * 0.23;
+      ball(
+        pivot,
+        "#edf4f4",
+        [Math.sin(a) * r, y + 0.3, Math.cos(a) * r],
+        [0.38, 0.15, 0.34],
+      );
+    }
     batchDetails(pivot);
     const notch = box(pivot, "#d99445", [0, 0.66, 0.235], [0.39, 0.18, 0.07]);
     notch.visible = false;
@@ -599,6 +760,9 @@ export function createWorld(): World {
     [4.2, -11.5, 0.95],
     [0.5, -6.5, 0.83],
   ].forEach(([x, z, s]) => tree(x, z, s));
+  const workerTree = tree(-3.5, -9.8, 1);
+  trees.pop();
+  workerTree.group.userData.kind = "worker-tree";
   // Distant snow forest uses three instanced layers, rather than hundreds of meshes.
   const distantCount = 62,
     farTrunks = new THREE.InstancedMesh(cyl, material("#7d654e"), distantCount),
@@ -614,7 +778,7 @@ export function createWorld(): World {
     );
   for (let i = 0; i < distantCount; i++) {
     const x = i < 40 ? -15 - random() * 10 : -6 + random() * 18,
-      z = i < 40 ? -20 + random() * 42 : -15 - random() * 14,
+      z = i < 40 ? -26 + random() * 56 : -25 - random() * 12,
       s = 0.8 + random() * 0.65;
     dummy.position.set(x, 1.1, z);
     dummy.scale.set(0.2 * s, 1.5 * s, 0.2 * s);
@@ -658,6 +822,13 @@ export function createWorld(): World {
     planks: station(3, -4, 3, -2.35),
     smoked: station(5, 1, 5, 2.5),
     market: station(4, 5, 4, 3.8),
+    crab: station(-6, 13, -5.7, 13),
+    kelp: station(-6, -12, -5.7, -12),
+    ore: station(15, -12, 15, -10),
+    ingots: station(15, -5, 15, -2.5),
+    meals: station(14, 6, 14, 8.6),
+    tackle: station(19, 16, 19, 19.1),
+    warehouse: station(10, 12, 10, 14),
   };
   // Short dock is directly connected to the yard. Upgrades extend it over the fish.
   for (let i = 0; i < 8; i++)
@@ -681,24 +852,91 @@ export function createWorld(): World {
       [0.12, 0.1, 0.12],
     );
   }
-  // The cutting table works at level zero: whole fish, cleaver, and individual steaks.
+  // Whole tuna lies along the board's X axis. Individual body sections expose
+  // image-textured flesh only when a blade has passed through that position.
   const bench = stations.steaks.group;
-  for (const x of [-0.9, 0.9])
-    for (const z of [-0.45, 0.45])
-      box(bench, darkWood, [x, 0.38, z], [0.13, 0.76, 0.13]);
-  box(bench, "#b58250", [0, 0.8, 0], [2.25, 0.2, 1.4]);
-  box(bench, "#e3c694", [0, 0.925, 0], [1.92, 0.06, 1.16]);
-  box(bench, "#b28454", [1.65, 1.01, 0], [1.6, 0.13, 0.58]);
-  for (const z of [-0.3, 0.3])
-    box(bench, "#d4aa72", [1.65, 1.13, z], [1.66, 0.11, 0.06]);
-  const cutterFish = createItem("fish");
-  cutterFish.scale.setScalar(1.65);
-  cutterFish.position.set(0, 1.15, 0);
-  bench.add(cutterFish);
-  const cleaver = group(bench, 0, 1.8, 0.05);
-  box(cleaver, "#bd8b54", [0, 0.12, 0], [0.11, 0.42, 0.1]);
-  box(cleaver, "#d5e2e7", [0.19, -0.15, 0], [0.46, 0.34, 0.065]);
-  box(cleaver, "#f4faf8", [0.19, -0.325, 0], [0.46, 0.025, 0.075]);
+  for (const x of [-1.5, 1.5])
+    for (const z of [-0.55, 0.55])
+      box(bench, darkWood, [x, 0.4, z], [0.14, 0.8, 0.14]);
+  const benchTop = box(bench, "#b58250", [0, 0.84, 0], [3.65, 0.18, 1.65]);
+  benchTop.material = generated.wood;
+  box(bench, "#e0ca9e", [0, 0.96, 0], [3.45, 0.07, 1.48]);
+  box(bench, "#b28454", [2.2, 1.01, 0.15], [1.25, 0.13, 0.75]);
+  const cutterFish = group(bench, 0, 1.22, 0);
+  cutterFish.rotation.y = Math.PI / 2;
+  cutterFish.scale.setScalar(1.1);
+  // Each yield tier has matching physical slices. A cut reveals two flesh
+  // surfaces only once the knife reaches the board; no steaks appear early.
+  const cutConfigurations = new Map<
+    number,
+    {
+      root: THREE.Group;
+      sections: THREE.Group[];
+      caps: THREE.Mesh[][];
+      edges: number[];
+    }
+  >();
+  for (let count = 4; count <= 6; count++) {
+    const root = group(cutterFish),
+      edges = [
+        -1.4,
+        ...Array.from(
+          { length: count + 1 },
+          (_, i) => -0.78 + (1.68 * i) / count,
+        ),
+        1.55,
+      ];
+    const sections: THREE.Group[] = [],
+      caps: THREE.Mesh[][] = [];
+    for (let i = 0; i < edges.length - 1; i++) {
+      const section = group(root),
+        skin = new THREE.Mesh(
+          fishBodyGeometry(edges[i], edges[i + 1]),
+          generated.tunaSkin,
+        );
+      skin.castShadow = true;
+      section.add(skin);
+      const faces: THREE.Mesh[] = [];
+      for (const end of [0, 1]) {
+        const z = edges[i + end],
+          cap = new THREE.Mesh(
+            new THREE.CircleGeometry(bodyRadius(z), 36),
+            generated.steakFace,
+          );
+        cap.scale.y = 0.77;
+        cap.position.z = z + (end ? 0.002 : -0.002);
+        if (!end) cap.rotation.y = Math.PI;
+        cap.visible = false;
+        section.add(cap);
+        faces.push(cap);
+      }
+      section.name = `cut-section-${i}`;
+      sections.push(section);
+      caps.push(faces);
+    }
+    for (const part of fishTemplate.children) {
+      if (["fish-body", "fish-belly"].includes(part.name)) continue;
+      const z = part.name === "tail" ? -1.3 : part.position.z;
+      const index = Math.min(
+        sections.length - 1,
+        Math.max(0, edges.findIndex((edge) => edge > z) - 1),
+      );
+      sections[index].add(part.clone(true));
+    }
+    root.visible = count === 4;
+    cutConfigurations.set(count, { root, sections, caps, edges });
+  }
+  const cleaver = group(bench, 0.95, 1.9, 0);
+  box(cleaver, "#7d5034", [0, 0.22, 0], [0.11, 0.48, 0.1]);
+  const knife = box(cleaver, "#d5e2e7", [0, -0.14, 0], [0.065, 0.43, 0.94]);
+  knife.material = generated.metal;
+  box(cleaver, "#f4faf8", [0, -0.36, 0], [0.025, 0.025, 0.95]);
+  const offcutBin = group(bench, 2.65, 0.35, -0.85);
+  cylinder(offcutBin, "#6d8794", [0, 0.14, 0], [0.45, 0.5, 0.45]);
+  cylinder(offcutBin, "#304e5b", [0, 0.4, 0], [0.38, 0.03, 0.38]);
+  const offcut = ball(offcutBin, "#647d86", [0, 0.43, 0], [0.25, 0.13, 0.28]);
+  offcut.material = generated.tunaSkin;
+  offcut.visible = false;
   function sawBlade(
     parent: THREE.Object3D,
     x: number,
@@ -726,8 +964,10 @@ export function createWorld(): World {
   }
   const blade = sawBlade(bench, 0, 1.5, -0.32);
   blade.visible = false;
+  blade.rotation.y = Math.PI / 2;
   const secondBlade = sawBlade(bench, 0.78, 1.5, -0.32);
   secondBlade.visible = false;
+  secondBlade.rotation.y = Math.PI / 2;
   const piston = group(bench, -1.15, 1.15, -0.4);
   piston.visible = false;
   cylinder(piston, silver, [0, 0.3, 0], [0.08, 0.6, 0.08], 0.3);
@@ -738,14 +978,88 @@ export function createWorld(): World {
   for (let i = 0; i < 7; i++)
     box(conveyor, "#76909b", [-0.55 + i * 0.18, 0.1, 0], [0.1, 0.055, 1.06]);
   const steaks: THREE.Group[] = [];
-  for (let i = 0; i < 4; i++) {
-    const item = createItem("steak");
-    item.position.set(0.75 + i * 0.34, 1.08, 0.3);
-    item.visible = false;
-    bench.add(item);
-    steaks.push(item);
+  for (let i = 0; i < 7; i++) {
+    const piece = createItem("steak");
+    piece.scale.setScalar(1.32);
+    piece.visible = false;
+    bench.add(piece);
+    steaks.push(piece);
   }
-  crate(bench, 2.3, 0, 0.4, 0.8);
+  function resetCut() {
+    cutConfigurations.forEach(({ root, sections, caps }, count) => {
+      root.visible = count === 4;
+      for (const section of sections) {
+        section.visible = true;
+        section.position.set(0, 0, 0);
+        section.rotation.set(0, 0, 0);
+      }
+      caps.forEach((faces) =>
+        faces.forEach((cap) => {
+          cap.visible = false;
+        }),
+      );
+    });
+    steaks.forEach((piece) => {
+      piece.visible = false;
+    });
+    offcut.visible = false;
+    cutterFish.userData.cutContacts = 0;
+    cleaver.position.set(0.96, 1.9, 0);
+    cleaver.rotation.z = 0;
+    cutterFish.visible = false;
+  }
+  function setCutProgress(progress: number, amount: number) {
+    const t = THREE.MathUtils.clamp(progress, 0, 1),
+      count = Math.min(6, Math.max(4, Math.floor(amount))),
+      cuts = count + 1;
+    const configuration = cutConfigurations.get(count)!;
+    cutConfigurations.forEach(({ root }, size) => {
+      root.visible = size === count;
+    });
+    const { sections, caps, edges } = configuration;
+    cutterFish.visible = true;
+    // Blade contact occurs halfway through each down/up stroke. First remove
+    // the head, then separate each steak along its actual geometric boundary.
+    const contacts = Math.min(cuts, Math.floor(t * cuts + 0.5));
+    cutterFish.userData.cutContacts = contacts;
+    const headT = THREE.MathUtils.clamp((t - 0.5 / cuts) * cuts * 1.5, 0, 1),
+      head = sections[count + 1];
+    head.position.set(headT * 0.7, -headT * headT * 0.8, headT * 0.85);
+    head.rotation.x = headT * 0.45;
+    head.visible = headT < 1;
+    caps[count + 1][0].visible = contacts > 0;
+    const detached = Math.max(0, contacts - 1);
+    for (let i = 1; i <= count; i++) {
+      const order = count - i;
+      sections[i].visible = detached <= order;
+      caps[i][1].visible = contacts > order;
+      caps[i][0].visible = contacts > order + 1;
+    }
+    sections[0].visible = t < 0.995;
+    caps[0][1].visible = contacts === cuts;
+    offcut.visible = headT >= 1;
+    for (let i = 0; i < steaks.length; i++) {
+      const at = (i + 1.5) / cuts,
+        move = THREE.MathUtils.clamp((t - at) * cuts, 0, 1);
+      steaks[i].visible = i < count && t >= at;
+      const from = edges[count - i] + 0.84 / count,
+        to = 1.7 + (i % 4) * 0.27;
+      steaks[i].position.set(
+        THREE.MathUtils.lerp(from * 1.1, to, move),
+        1.17 + Math.sin(move * Math.PI) * 0.12,
+        0.08 + Math.floor(i / 4) * 0.43,
+      );
+      steaks[i].rotation.set(0, 0.1 * i, ((1 - move) * Math.PI) / 2);
+    }
+    const stroke = Math.min(cuts - 1, Math.floor(t * cuts)),
+      local = (t * cuts) % 1;
+    const cutX = edges[count + 1 - stroke] * 1.1;
+    cleaver.position.x = cutX;
+    cleaver.position.y = 1.95 - Math.pow(Math.sin(local * Math.PI), 4) * 0.66;
+    cleaver.rotation.z = Math.sin(local * Math.PI) * 0.05;
+    blade.position.x = cutX;
+    secondBlade.position.x = cutX + 0.43;
+  }
   const cutter = {
     cleaver,
     blade,
@@ -754,7 +1068,10 @@ export function createWorld(): World {
     conveyor,
     fish: cutterFish,
     steaks,
+    setCutProgress,
+    reset: resetCut,
   };
+  resetCut();
   // Sawmill and smoker begin as honest, unbuilt foundations.
   box(stations.planks.group, "#d5e0e4", [0, 0.025, 0], [2.6, 0.05, 1.9]);
   box(stations.smoked.group, "#ccd9de", [0, 0.025, 0], [1.9, 0.05, 1.8]);
@@ -776,13 +1093,6 @@ export function createWorld(): World {
     marketGoods.add(item);
   }
   const customers: THREE.Group[] = [];
-  for (let i = 0; i < 5; i++) {
-    const customer = winterPerson(scene, i % 2 ? "#e2c15b" : "#f0cf69").root;
-    customer.position.set(4 + (i % 2) * 0.25, 0.35, 6.6 + i * 1.35);
-    customer.rotation.y = Math.PI;
-    customer.userData.basePosition = customer.position.clone();
-    customers.push(customer);
-  }
   for (const x of [2.05, 5.95]) {
     for (let i = 0; i < 7; i++) {
       cylinder(
@@ -818,6 +1128,57 @@ export function createWorld(): World {
         [0.115, 0.065, 0.115],
       );
     }
+  // Hand-placed harbor details leave clear working lanes through the yard.
+  const yardDetails = group(scene);
+  for (const [x, z] of [
+    [-4.85, 7.25],
+    [6.9, 7.8],
+  ] as const) {
+    const barrel = group(yardDetails, x, 0.4, z);
+    cylinder(barrel, "#a87b4c", [0, 0.43, 0], [0.36, 0.86, 0.36]);
+    for (const y of [0.13, 0.7])
+      cylinder(barrel, "#637b83", [0, y, 0], [0.375, 0.06, 0.375]);
+    cylinder(barrel, "#7e5b38", [0, 0.875, 0], [0.32, 0.035, 0.32]);
+    const coil = new THREE.Mesh(
+      new THREE.TorusGeometry(0.25, 0.036, 5, 22),
+      material("#c9aa71"),
+    );
+    coil.rotation.x = Math.PI / 2;
+    coil.position.set(0, 0.93, 0);
+    barrel.add(coil);
+    batchDetails(barrel);
+  }
+  const logRack = group(yardDetails, -4.78, 0.43, 5.75);
+  for (const x of [-0.42, 0.42])
+    box(logRack, "#7e623e", [x, 0.28, 0], [0.1, 0.55, 1.2]);
+  for (let i = 0; i < 5; i++) {
+    const log = createItem("wood");
+    log.scale.setScalar(0.65);
+    log.position.set(0, 0.24 + Math.floor(i / 2) * 0.18, (i % 2) * 0.23 - 0.13);
+    logRack.add(log);
+  }
+  for (const [x, z] of [
+    [-5.25, 2.65],
+    [7.2, 3.3],
+  ] as const) {
+    const lamp = group(yardDetails, x, 0.4, z);
+    cylinder(lamp, "#746849", [0, 1.4, 0], [0.055, 2.8, 0.055]);
+    box(lamp, "#746849", [0.22, 2.74, 0], [0.5, 0.07, 0.07]);
+    box(lamp, "#526775", [0.43, 2.3, 0], [0.28, 0.43, 0.28]);
+    const glass = box(lamp, "#f6d48c", [0.43, 2.3, 0.02], [0.21, 0.29, 0.25]);
+    (glass.material as THREE.MeshStandardMaterial).emissive.set("#97702c");
+    box(lamp, "#e4ecea", [0.43, 2.57, 0], [0.37, 0.08, 0.36]);
+    batchDetails(lamp);
+  }
+  for (let i = 0; i < 16; i++) {
+    const drift = ball(
+      yardDetails,
+      i % 2 ? "#e9f3f6" : "#dbeaf0",
+      [-6.85 + (i % 2) * 0.18, 0.25, -19 + i * 2.75],
+      [0.5 + (i % 3) * 0.15, 0.24, 0.85],
+    );
+    drift.rotation.y = i * 0.5;
+  }
   // Every equipment level has a retained, independently visible world component.
   const keys: UpgradeId[] = [
     "axe",
@@ -832,6 +1193,13 @@ export function createWorld(): World {
     "freezer",
     "boots",
     "nets",
+    "crabpots",
+    "kelpfarm",
+    "quarry",
+    "forge",
+    "kitchen",
+    "boatyard",
+    "warehouse",
   ];
   const upgradeGroups = Object.fromEntries(
     keys.map((key) => [key, []]),
@@ -965,27 +1333,18 @@ export function createWorld(): World {
     const workerStage = stage(
       "crew",
       scene,
-      -4 + (level - 1) * 1.3,
-      0.4,
-      3.8 + (level % 2) * 0.8,
+      12 + (level % 3) * 0.8,
+      0.35,
+      10 + Math.floor((level - 1) / 3) * 1.1,
     );
-    const helper = winterPerson(workerStage, level % 2 ? "#23a0b4" : "#418fa7"),
-      worker = helper.root;
-    worker.rotation.y = -0.7;
-    worker.userData.workerPerson = true;
-    worker.userData.arms = [helper.leftArm, helper.rightArm];
-    worker.userData.legs = helper.legs;
-    worker.traverse((object) => {
-      object.castShadow = false;
-    });
-    const carrying = createItem(level % 2 ? "wood" : "fish");
-    carrying.position.set(0, 1, -0.35);
-    carrying.scale.setScalar(0.7);
-    worker.add(carrying);
-    worker.userData.carrying = carrying;
-    workerStage.userData.worker = true;
-    workerStage.userData.basePosition = workerStage.position.clone();
-    crate(workerStage, 0.65, 0, 0.2, 0.45);
+    crate(workerStage, 0, 0, 0, 0.65);
+    const pennant = box(
+      workerStage,
+      level % 2 ? "#c59b52" : "#629baa",
+      [0, 1.1, 0.32],
+      [0.7, 0.5, 0.045],
+    );
+    cylinder(workerStage, "#775b3f", [-0.37, 0.7, 0.32], [0.035, 1.4, 0.035]);
     const smoker = stage("smokehouse", stations.smoked.group);
     if (level === 1) {
       box(smoker, "#6e7f89", [0, 0.75, 0], [1.5, 1.5, 1.25]);
@@ -1069,6 +1428,596 @@ export function createWorld(): World {
     smokePuffs.push(puff);
   }
 
+  for (let level = 6; level <= 8; level++) {
+    const lodging = stage("crew", scene, 12 + (level - 6) * 1.1, 0.35, 13.1);
+    box(lodging, "#6b8790", [0, 0.6, 0], [0.9, 1.2, 0.9]);
+    box(lodging, "#e6edf0", [0, 1.25, 0], [1.1, 0.16, 1.1]);
+    box(lodging, "#d5ad66", [0, 0.7, 0.47], [0.35, 0.45, 0.03]);
+  }
+  // New harbor districts are connected by timber lanes, never teleport portals.
+  function deck(x: number, z: number, width: number, depth: number) {
+    const base = box(scene, "#92694b", [x, 0.17, z], [width, 0.42, depth]);
+    const surface = new THREE.Mesh(
+      new THREE.BoxGeometry(width, 0.065, depth),
+      generated.wood,
+    );
+    surface.position.set(x, 0.405, z);
+    surface.receiveShadow = true;
+    scene.add(surface);
+    return base;
+  }
+  for (const d of deckFootprints) deck(d.x, d.z, d.w, d.d);
+  // Coastal jetties are reachable from the snowy bank and host real hoists/beds.
+  for (const id of ["crab", "kelp"] as const) {
+    const root = stations[id].group;
+    for (let i = 0; i < 12; i++)
+      box(
+        root,
+        i % 2 ? "#c28b54" : "#d0a06b",
+        [-0.6 + i * 0.16, -0.01, 0],
+        [0.15, 0.16, 2.25],
+      );
+    for (const z of [-1, 1])
+      cylinder(root, "#8f6846", [-0.6, -0.08, z], [0.09, 0.9, 0.09]);
+  }
+  const crabPot = group(stations.crab.group, -0.55, -0.3, 0);
+  crabPot.name = "crab-pot";
+  activityProps["crab-pot"] = crabPot;
+  for (const y of [0, 0.55])
+    for (const z of [-0.45, 0.45])
+      box(crabPot, "#555b48", [0, y, z], [0.9, 0.045, 0.045]);
+  for (const x of [-0.45, 0.45])
+    for (const z of [-0.45, 0.45])
+      box(crabPot, "#657464", [x, 0.28, z], [0.04, 0.59, 0.04]);
+  for (let i = -3; i <= 3; i++)
+    box(crabPot, "#7f8d7d", [i * 0.12, 0.28, 0.45], [0.014, 0.55, 0.014]);
+  const potCrab = createItem("crab");
+  potCrab.position.y = 0.12;
+  crabPot.add(potCrab);
+  cylinder(
+    stations.crab.group,
+    "#b3a87c",
+    [-0.55, 0.75, 0],
+    [0.018, 2.1, 0.018],
+  );
+  const kelpStems = group(stations.kelp.group, -0.75, -0.2, 0);
+  kelpStems.name = "kelp-stems";
+  activityProps["kelp-stems"] = kelpStems;
+  for (let i = 0; i < 9; i++) {
+    const leaf = box(
+      kelpStems,
+      i % 2 ? "#3a7859" : "#6e9b56",
+      [
+        (i % 3) * 0.32 - 0.4,
+        0.4 + Math.floor(i / 3) * 0.12,
+        (Math.floor(i / 3) - 1) * 0.38,
+      ],
+      [0.13, 0.85, 0.05],
+    );
+    leaf.rotation.z = ((i % 3) - 1) * 0.15;
+  }
+  const oreRock = group(stations.ore.group, 0, 0.4, 0);
+  oreRock.name = "ore-rock";
+  activityProps["ore-rock"] = oreRock;
+  for (let i = 0; i < 7; i++) {
+    const rock = shape(
+      oreRock,
+      new THREE.DodecahedronGeometry(1, 1),
+      i % 2 ? "#667c85" : "#84949b",
+      [((i % 3) - 1) * 0.8, Math.floor(i / 3) * 0.55, ((i % 2) - 0.5) * 0.7],
+      [0.65, 0.6, 0.65],
+    );
+    rock.rotation.set(random() * 0.5, random() * 2, 0);
+    for (let j = 0; j < 2; j++)
+      ball(
+        oreRock,
+        "#adcac7",
+        [((i % 3) - 1) * 0.8, 0.8 + Math.floor(i / 3) * 0.5, j * 0.2 - 0.1],
+        [0.12, 0.1, 0.11],
+      );
+  }
+  function buildingShell(
+    parent: THREE.Group,
+    width: number,
+    depth: number,
+    color: string,
+    roofColor: string,
+    height = 2.5,
+  ) {
+    box(parent, color, [0, height / 2, 0], [width, height, depth]);
+    // Narrow weatherboards, corner timbers and a stone footing give every
+    // workshop a finished facade from the camera's front and right-hand sides.
+    box(parent, "#89918a", [0, 0.13, 0], [width + 0.15, 0.26, depth + 0.15]);
+    for (let row = 1; row < 9; row++) {
+      const y = 0.25 + (row * (height - 0.25)) / 9;
+      for (const sign of [-1, 1]) {
+        box(
+          parent,
+          "#a8aaa0",
+          [sign * (width / 2 + 0.012), y, 0],
+          [0.025, 0.016, depth],
+        );
+        box(
+          parent,
+          "#a8aaa0",
+          [0, y, sign * (depth / 2 + 0.012)],
+          [width, 0.016, 0.025],
+        );
+      }
+    }
+    for (const x of [-width / 2, width / 2])
+      for (const z of [-depth / 2, depth / 2]) {
+        const beam = box(
+          parent,
+          "#8c704e",
+          [x, height / 2, z],
+          [0.12, height, 0.12],
+        );
+        beam.material = generated.wood;
+      }
+    for (const sign of [-1, 1]) {
+      box(
+        parent,
+        "#7e684d",
+        [sign * (width / 2 + 0.025), height - 0.08, 0],
+        [0.13, 0.14, depth + 0.13],
+      );
+      box(
+        parent,
+        "#806a4d",
+        [0, height - 0.08, sign * (depth / 2 + 0.025)],
+        [width + 0.13, 0.14, 0.13],
+      );
+    }
+    function windowFrame(
+      side: boolean,
+      along: number,
+      y: number,
+      w: number,
+      h: number,
+    ) {
+      const x = side ? width / 2 + 0.045 : along,
+        z = side ? along : depth / 2 + 0.045;
+      box(
+        parent,
+        "#514d3c",
+        [x, y, z],
+        side ? [0.07, h + 0.18, w + 0.18] : [w + 0.18, h + 0.18, 0.07],
+      );
+      const glass = box(
+        parent,
+        "#d9b978",
+        [x + (side ? 0.043 : 0), y, z + (side ? 0 : 0.043)],
+        side ? [0.025, h, w] : [w, h, 0.025],
+      );
+      // A small warm emission reads as an inhabited workshop in the snow.
+      const glassMaterial = material("#d9b978");
+      glassMaterial.emissive.set("#55421c");
+      glass.material = glassMaterial;
+      box(
+        parent,
+        "#e8d5aa",
+        [x + (side ? 0.065 : 0), y, z + (side ? 0 : 0.065)],
+        side ? [0.035, h + 0.04, 0.045] : [0.045, h + 0.04, 0.035],
+      );
+      box(
+        parent,
+        "#e8d5aa",
+        [x + (side ? 0.067 : 0), y, z + (side ? 0 : 0.067)],
+        side ? [0.035, 0.045, w + 0.04] : [w + 0.04, 0.045, 0.035],
+      );
+      box(
+        parent,
+        "#eee6cf",
+        [x, y - h / 2 - 0.11, z],
+        side ? [0.2, 0.1, w + 0.27] : [w + 0.27, 0.1, 0.2],
+      );
+    }
+    for (const x of [-width * 0.33, width * 0.33])
+      windowFrame(false, x, height * 0.61, width * 0.2, height * 0.29);
+    for (const z of depth > 2 ? [-depth * 0.25, depth * 0.25] : [0])
+      windowFrame(true, z, height * 0.59, depth * 0.24, height * 0.32);
+    const door = box(
+      parent,
+      "#715c42",
+      [0, height * 0.35, depth / 2 + 0.045],
+      [width * 0.22, height * 0.7, 0.08],
+    );
+    door.material = generated.wood;
+    for (const x of [-width * 0.115, width * 0.115])
+      box(
+        parent,
+        "#b59b6e",
+        [x, height * 0.36, depth / 2 + 0.1],
+        [0.065, height * 0.75, 0.08],
+      );
+    box(
+      parent,
+      "#b59b6e",
+      [0, height * 0.735, depth / 2 + 0.1],
+      [width * 0.25, 0.07, 0.08],
+    );
+    ball(
+      parent,
+      "#d9bb72",
+      [width * 0.07, height * 0.36, depth / 2 + 0.115],
+      [0.045, 0.045, 0.03],
+    );
+    const slope = Math.atan2(0.85, width / 2 + 0.2),
+      roofWidth = Math.hypot(width / 2 + 0.2, 0.85);
+    for (const sign of [-1, 1]) {
+      const roof = group(parent, sign * (width / 4 + 0.1), height + 0.46, 0);
+      roof.rotation.z = -sign * slope;
+      const sheet = box(
+        roof,
+        roofColor,
+        [0, 0, 0],
+        [roofWidth, 0.13, depth + 0.45],
+      );
+      sheet.material = generated.metal;
+      for (let i = 0; i < 7; i++)
+        box(
+          roof,
+          roofColor,
+          [0, 0.085, -depth / 2 - 0.15 + (i * (depth + 0.3)) / 6],
+          [roofWidth, 0.045, 0.035],
+        );
+      // Broken snow caps leave the underlying ribbed roof visible.
+      box(
+        roof,
+        "#edf4f3",
+        [-sign * roofWidth * 0.15, 0.125, -depth * 0.21],
+        [roofWidth * 0.56, 0.13, depth * 0.55],
+      );
+      box(
+        roof,
+        "#e4eff0",
+        [sign * roofWidth * 0.32, 0.115, depth * 0.27],
+        [roofWidth * 0.25, 0.11, depth * 0.43],
+      );
+      box(
+        roof,
+        roofColor,
+        [(sign * roofWidth) / 2, -0.025, 0],
+        [0.09, 0.2, depth + 0.55],
+      );
+    }
+    const gable = new THREE.Shape([
+      new THREE.Vector2(-width / 2, 0),
+      new THREE.Vector2(width / 2, 0),
+      new THREE.Vector2(0, 0.85),
+    ]);
+    for (const sign of [-1, 1]) {
+      const face = new THREE.Mesh(
+        new THREE.ShapeGeometry(gable),
+        material(color),
+      );
+      face.position.set(0, height, sign * (depth / 2 + 0.005));
+      face.material.side = THREE.DoubleSide;
+      parent.add(face);
+      for (const direction of [-1, 1]) {
+        const trim = box(
+          parent,
+          "#806a4c",
+          [direction * width * 0.25, height + 0.43, sign * (depth / 2 + 0.055)],
+          [roofWidth, 0.09, 0.09],
+        );
+        trim.rotation.z = -direction * slope;
+      }
+    }
+    box(parent, "#edf5f4", [0, height + 0.94, 0], [0.19, 0.12, depth + 0.58]);
+    // Porch lamp and a small timber sign distinguish the entrance from a wall.
+    const lamp = group(parent, width * 0.19, height * 0.72, depth / 2 + 0.2);
+    box(lamp, "#526773", [0, 0, 0], [0.18, 0.29, 0.18]);
+    box(lamp, "#f2cf82", [0, -0.01, 0.102], [0.12, 0.18, 0.025]);
+    box(lamp, "#e7ede8", [0, 0.18, 0], [0.25, 0.06, 0.24]);
+    box(
+      parent,
+      "#ac8755",
+      [0, height * 0.86, depth / 2 + 0.11],
+      [width * 0.37, 0.23, 0.075],
+    );
+  }
+  // Equipment sits on solid work surfaces; later tiers enclose and extend them.
+  box(stations.ingots.group, "#7c7466", [0, 0.48, 1.6], [1.55, 0.96, 0.7]);
+  const anvil = box(
+    stations.ingots.group,
+    "#80949e",
+    [0, 1.03, 1.6],
+    [1.7, 0.18, 0.8],
+  );
+  anvil.material = generated.metal;
+  box(stations.meals.group, "#a08768", [0, 0.6, 1.7], [1.7, 1.2, 0.85]);
+  const cookingPot = cylinder(
+    stations.meals.group,
+    "#708d99",
+    [0, 1.3, 1.7],
+    [0.43, 0.4, 0.43],
+    0.2,
+  );
+  cookingPot.material = generated.metal;
+  cylinder(stations.meals.group, "#b28049", [0, 1.51, 1.7], [0.36, 0.02, 0.36]);
+  box(stations.tackle.group, "#a47b4d", [0, 0.58, 2.2], [2.9, 1.16, 0.8]);
+  const toolSurface = box(
+    stations.tackle.group,
+    "#d2ad73",
+    [0, 1.2, 2.2],
+    [3.15, 0.12, 1],
+  );
+  toolSurface.material = generated.wood;
+  const forgeHammer = group(stations.ingots.group, -0.6, 1.2, 1.7);
+  forgeHammer.name = "forge-hammer";
+  activityProps["forge-hammer"] = forgeHammer;
+  box(forgeHammer, "#906642", [0, 0.1, 0], [0.09, 0.7, 0.09]);
+  const hammerHead = box(
+    forgeHammer,
+    "#879ba5",
+    [0, 0.43, 0],
+    [0.47, 0.23, 0.24],
+  );
+  hammerHead.material = generated.metal;
+  const forgeGlow = ball(
+    stations.ingots.group,
+    "#dd8a43",
+    [-1.05, 0.78, 1.69],
+    [0.21, 0.16, 0.025],
+  );
+  forgeGlow.name = "forge-glow";
+  forgeGlow.userData.baseScale = forgeGlow.scale.clone();
+  (forgeGlow.material as THREE.MeshStandardMaterial).emissive.set("#bb501b");
+  activityProps["forge-glow"] = forgeGlow;
+  const spoon = group(stations.meals.group, 0.1, 1.75, 1.7);
+  spoon.name = "cooking-spoon";
+  activityProps["cooking-spoon"] = spoon;
+  box(spoon, "#ab7f4a", [0, 0.05, 0], [0.045, 0.8, 0.045]);
+  ball(spoon, "#d2aa6f", [0, -0.37, 0], [0.12, 0.06, 0.09]);
+  const boatHammer = group(stations.tackle.group, 0.4, 1.55, 2.2);
+  boatHammer.name = "boatyard-hammer";
+  activityProps["boatyard-hammer"] = boatHammer;
+  box(boatHammer, "#8f633d", [0, 0, 0], [0.08, 0.65, 0.08]);
+  box(boatHammer, "#8ca2af", [0, 0.34, 0], [0.4, 0.18, 0.2]);
+  const stockCrates = group(stations.warehouse.group, 1.1, 0, 0.1);
+  stockCrates.name = "stock-crates";
+  activityProps["stock-crates"] = stockCrates;
+  for (let i = 0; i < 9; i++) {
+    const c = crate(
+      stockCrates,
+      (i % 3) * 0.7,
+      Math.floor(i / 3) * 0.65,
+      0,
+      0.62,
+    );
+    c.visible = i < 2;
+  }
+  for (let level = 1; level <= 5; level++) {
+    const pots = stage("crabpots", stations.crab.group);
+    if (level === 1) {
+      cylinder(pots, "#866347", [0.7, 1.2, -0.55], [0.09, 2.4, 0.09]);
+      box(pots, "#c49a5e", [0.1, 2.2, -0.55], [1.3, 0.12, 0.12]);
+      const wheel = cylinder(
+        pots,
+        "#738993",
+        [0.6, 1.75, -0.55],
+        [0.25, 0.1, 0.25],
+        0.4,
+      );
+      wheel.rotation.z = Math.PI / 2;
+    } else if (level === 2) {
+      for (let i = 0; i < 3; i++) crate(pots, 0.5 + i * 0.48, 0, 0.55, 0.42);
+    } else if (level === 3) {
+      box(pots, "#74979d", [0.8, 0.5, 0], [0.75, 0.65, 0.7]);
+      const drum = cylinder(
+        pots,
+        "#9db6be",
+        [0.8, 0.95, 0],
+        [0.28, 0.45, 0.28],
+        0.4,
+      );
+      drum.material = generated.metal;
+    } else if (level === 4) {
+      for (const z of [-1, 1]) {
+        cylinder(pots, "#b2986a", [1.5, 1.15, z], [0.065, 2.3, 0.065]);
+        box(pots, "#d4aa67", [1.5, 2.2, 0], [0.12, 0.12, 2.3]);
+      }
+      box(pots, "#578897", [1, 2.3, 0], [1.4, 0.12, 2.4]);
+    } else {
+      cylinder(pots, "#d8ba72", [0.7, 2.55, -0.55], [0.09, 2.7, 0.09]);
+      box(pots, "#e0bd6e", [-0.1, 3.75, -0.55], [1.9, 0.18, 0.18]);
+      box(pots, "#6d9ba3", [1.55, 0.8, 0.2], [0.6, 1.2, 0.7]);
+    }
+    const garden = stage("kelpfarm", stations.kelp.group);
+    const row = level - 1;
+    box(garden, "#6d775a", [0.55 + row * 0.34, 0.15, 0], [0.3, 0.24, 1.8]);
+    for (let k = 0; k < 4; k++)
+      ball(
+        garden,
+        k % 2 ? "#4c8c63" : "#619b68",
+        [0.55 + row * 0.34, 0.5, -0.63 + k * 0.43],
+        [0.14, 0.43, 0.13],
+      );
+    if (level === 2) {
+      for (const z of [-0.9, 0.9])
+        box(garden, "#99794d", [1.2, 0.35, z], [1.8, 0.16, 0.13]);
+    }
+    if (level === 3) {
+      for (const x of [0.35, 2.15])
+        for (const z of [-1.02, 1.02])
+          box(garden, "#9fbbba", [x, 1.05, z], [0.065, 2.1, 0.065]);
+      const glass = new THREE.Mesh(
+        new THREE.BoxGeometry(1.95, 0.075, 2.15),
+        new THREE.MeshStandardMaterial({
+          color: "#a6d2d3",
+          transparent: true,
+          opacity: 0.32,
+          roughness: 0.2,
+          depthWrite: false,
+        }),
+      );
+      glass.position.set(1.25, 2.1, 0);
+      garden.add(glass);
+    }
+    if (level === 4) {
+      box(garden, "#8caeaa", [2.25, 0.6, 0.7], [0.35, 1.1, 0.4]);
+      cylinder(garden, "#b8c9c0", [2.25, 1.35, 0.7], [0.04, 0.8, 0.04]);
+    }
+    if (level === 5) {
+      box(garden, "#c9a965", [1.25, 2.3, 1.05], [1.7, 0.28, 0.08]);
+      crate(garden, 2.4, 0, -0.65, 0.5);
+    }
+    const quarry = stage("quarry", stations.ore.group);
+    if (level === 1) {
+      for (let i = 0; i < 3; i++)
+        box(quarry, "#8b7050", [-1.2 + i * 0.7, 0.1, 1.3], [0.65, 0.2, 0.85]);
+    } else if (level === 2) {
+      box(quarry, "#e0bb58", [1.6, 0.65, 0], [0.6, 1.2, 0.8]);
+      const drill = cylinder(
+        quarry,
+        "#7d949d",
+        [1.6, 0.7, 0.75],
+        [0.1, 1.1, 0.1],
+        0.4,
+      );
+      drill.rotation.x = Math.PI / 2;
+    } else if (level === 3) {
+      buildingShell(quarry, 1.6, 1.6, "#b7a184", "#7c929b", 1.8);
+      quarry.position.set(2.2, 0, -1.2);
+    } else if (level === 4) {
+      crate(quarry, -1.7, 0, 0.8, 0.85);
+      crate(quarry, -1.7, 0.85, 0.8, 0.65);
+    } else {
+      cylinder(quarry, "#ab8550", [2, 1.8, 0], [0.1, 3.6, 0.1]);
+      box(quarry, "#ddba61", [1, 3.3, 0], [2.3, 0.15, 0.15]);
+    }
+    const forge = stage("forge", stations.ingots.group);
+    if (level === 1) {
+      buildingShell(forge, 3.1, 2.6, "#8e8d81", "#566c77");
+      box(forge, "#56717e", [0, 0.5, 1.6], [1.6, 0.95, 0.7]);
+      box(forge, "#9cb2b7", [0, 1.05, 1.6], [1.8, 0.2, 0.8]);
+      const hearth = group(forge, -1.05, 0, 1.25);
+      box(hearth, "#805e4e", [0, 0.72, 0], [0.92, 1.44, 0.82]);
+      for (let row = 0; row < 6; row++)
+        for (let col = 0; col < 3; col++) {
+          const x = -0.32 + col * 0.32 + (row % 2) * 0.08;
+          if (x > 0.41) continue;
+          box(
+            hearth,
+            row % 2 ? "#ac8570" : "#a07865",
+            [x, 0.14 + row * 0.23, 0.422],
+            [0.29, 0.205, 0.035],
+          );
+        }
+      box(hearth, "#302f2b", [0, 0.78, 0.448], [0.52, 0.51, 0.055]);
+      for (const x of [-0.32, 0.32])
+        box(hearth, "#bf9d7e", [x, 0.78, 0.48], [0.12, 0.64, 0.12]);
+      box(hearth, "#bf9d7e", [0, 1.1, 0.48], [0.76, 0.15, 0.12]);
+      box(hearth, "#677b80", [0, 1.48, 0], [1.02, 0.15, 0.92]);
+      box(forge, "#9d826b", [-1.05, 2.58, 0.86], [0.4, 2.2, 0.43]);
+      for (let row = 0; row < 8; row++)
+        box(
+          forge,
+          "#735f51",
+          [-1.05, 1.62 + row * 0.26, 1.084],
+          [0.41, 0.022, 0.015],
+        );
+      box(forge, "#657980", [-1.05, 3.72, 0.86], [0.57, 0.13, 0.58]);
+      box(forge, "#354a52", [-1.05, 3.8, 0.86], [0.35, 0.03, 0.36]);
+      const horn = shape(
+        forge,
+        new THREE.ConeGeometry(0.19, 0.5, 12),
+        "#81969e",
+        [0.95, 1.07, 1.6],
+        [1, 1, 1],
+      );
+      horn.rotation.z = -Math.PI / 2;
+    } else if (level === 2) {
+      const furnace = box(forge, "#667783", [-1.8, 0.7, 0.2], [0.8, 1.4, 1.1]);
+      furnace.material = generated.metal;
+      box(forge, "#eaa24b", [-1.8, 0.7, 0.77], [0.45, 0.5, 0.03]);
+    } else if (level === 3) {
+      cylinder(forge, "#9eaaa8", [1, 2.7, -0.7], [0.2, 2, 0.2]);
+    } else if (level === 4) {
+      box(forge, "#8b9e9f", [1.95, 0.6, 0], [1, 1.2, 1.8]);
+    } else {
+      box(forge, "#dbbb68", [0, 2.7, 1.37], [1.7, 0.36, 0.09]);
+      crate(forge, 1.9, 0, 1.3, 0.7);
+    }
+    const kitchen = stage("kitchen", stations.meals.group);
+    if (level === 1) {
+      buildingShell(kitchen, 3.4, 2.8, "#e8dbb6", "#ac6753");
+      const stove = box(kitchen, "#6a828d", [0, 0.6, 1.7], [2.5, 1.2, 0.85]);
+      stove.material = generated.metal;
+      cylinder(kitchen, "#b8c7c8", [0, 1.26, 1.7], [0.43, 0.32, 0.43], 0.3);
+    } else if (level === 2) {
+      for (let i = 0; i < 8; i++)
+        box(
+          kitchen,
+          i % 2 ? "#f0e5c8" : "#be7661",
+          [-1.8 + i * 0.45, 2.4, 1.8],
+          [0.45, 0.12, 1.3],
+        );
+    } else if (level === 3) {
+      cylinder(kitchen, "#8fa3aa", [1, 3.1, -0.7], [0.18, 1.7, 0.18]);
+    } else if (level === 4) {
+      box(kitchen, "#b39b72", [-2.4, 0.5, 0.8], [1.3, 1, 1.8]);
+    } else {
+      box(kitchen, "#d6ba77", [0, 2.72, 1.44], [2, 0.38, 0.07]);
+      crate(kitchen, 2.2, 0, 1, 0.7);
+    }
+    const boat = stage("boatyard", stations.tackle.group);
+    if (level === 1) {
+      buildingShell(boat, 4.2, 3.4, "#7e9a9a", "#557587", 2.8);
+      box(boat, "#916946", [0, 0.6, 2.2], [3, 1.2, 0.8]);
+      box(boat, "#d1a970", [0, 1.25, 2.2], [3.3, 0.12, 1]);
+    } else if (level === 2) {
+      const hull = ball(boat, "#a27349", [-3, 0.35, 0.4], [0.95, 0.38, 2.3]);
+      hull.material = generated.wood;
+      ball(boat, "#c6a777", [-3, 0.5, 0.4], [0.74, 0.16, 1.9]);
+      for (let i = 0; i < 4; i++)
+        box(boat, "#926b46", [-3, 0.65, -0.8 + i * 0.7], [1.5, 0.08, 0.16]);
+    } else if (level === 3) {
+      cylinder(boat, "#c4a05c", [2.5, 2, 1.8], [0.1, 4, 0.1]);
+      box(boat, "#e0b858", [1.9, 3.7, 1.8], [1.7, 0.15, 0.15]);
+    } else if (level === 4) {
+      crate(boat, -2.5, 0, 2.8, 0.8);
+      crate(boat, -1.6, 0, 2.8, 0.8);
+    } else {
+      box(boat, "#e2c077", [0, 3, 1.77], [2.4, 0.42, 0.09]);
+      box(boat, "#5a8698", [2.7, 1, 0.1], [1, 2, 2.2]);
+    }
+    const store = stage("warehouse", stations.warehouse.group);
+    if (level === 1) {
+      for (const x of [-2, 2])
+        box(store, "#8d6b45", [x, 1.45, -0.4], [0.15, 2.9, 0.15]);
+      box(store, "#b49364", [0, 2.9, -0.4], [4.2, 0.2, 0.2]);
+      box(store, "#a28255", [0, 1.3, -1.3], [4.2, 2.6, 0.12]);
+    } else if (level === 2) {
+      const roof = box(store, "#648894", [0, 3, 0], [4.6, 0.25, 3.2]);
+      roof.material = generated.metal;
+    } else if (level === 3) {
+      box(store, "#aa8354", [-2.1, 1.3, 0], [0.14, 2.6, 2.8]);
+      box(store, "#aa8354", [2.1, 1.3, 0], [0.14, 2.6, 2.8]);
+    } else if (level === 4) {
+      cylinder(store, "#ad854a", [2.8, 2.3, 0.6], [0.12, 4.6, 0.12]);
+      box(store, "#e0b655", [1.6, 4.4, 0.6], [2.8, 0.18, 0.18]);
+    } else {
+      box(store, "#d9b76c", [0, 3.3, 1.5], [2.2, 0.42, 0.1]);
+      crate(store, -2.8, 0, 0.8, 0.8);
+      crate(store, -2.8, 0.8, 0.8, 0.7);
+    }
+  }
+  // More harvestable pines and quarry-side trees make the wider area useful.
+  for (const [x, z, h] of [
+    [1, -18, 1.1],
+    [4, -20, 1.2],
+    [8, -18, 0.95],
+    [19, -18, 1.05],
+    [24, -13, 1.2],
+    [25, -6, 1],
+    [25, 3, 1.15],
+    [24, 21, 1.05],
+    [5, 21, 1.1],
+  ])
+    tree(x, z, h);
   for (const id of keys) upgradeGroups[id].forEach((g) => batchDetails(g));
   batchDetails(market);
   function applyUpgrades(levels: GameState["upgrades"]) {
@@ -1081,6 +2030,7 @@ export function createWorld(): World {
         g.visible = wanted;
       });
     }
+    forgeGlow.visible = (levels.forge || 0) > 0;
     dockLevel = levels.dock || 0;
     const cutterLevel = levels.cutter || 0;
     blade.visible = cutterLevel >= 1;
@@ -1102,14 +2052,27 @@ export function createWorld(): World {
     return changed;
   }
   const obstacles = [
-    { x: -2, z: 0, w: 2.5, d: 1.5 },
+    { x: -2, z: 0, w: 3.65, d: 1.65 },
     { x: 3, z: -4, w: 2.65, d: 1.9 },
     { x: 5, z: 1, w: 1.9, d: 1.7 },
     { x: 4, z: 5, w: 3.8, d: 1.3 },
     { x: 7, z: -1, w: 1.85, d: 1.85 },
+    { x: 15, z: -12, w: 2.4, d: 2.3 },
+    { x: 15, z: -5, w: 3.6, d: 3 },
+    { x: 15, z: -3.4, w: 1.8, d: 0.8 },
+    { x: 14, z: 6, w: 3.8, d: 3.2 },
+    { x: 14, z: 7.7, w: 2.5, d: 0.85 },
+    { x: 19, z: 16, w: 4.8, d: 3.8 },
+    { x: 19, z: 18.2, w: 3.15, d: 1 },
+    { x: 10, z: 11.5, w: 4.5, d: 3 },
   ];
   const isWalkable = (x: number, z: number) => {
-    if ((x < -7.05 && !onDock(x, z)) || x > 9 || z < -12 || z > 12)
+    if (
+      (x < bounds.minX && !onDock(x, z)) ||
+      x > bounds.maxX ||
+      z < bounds.minZ ||
+      z > bounds.maxZ
+    )
       return false;
     if (
       obstacles.some(
@@ -1117,6 +2080,17 @@ export function createWorld(): World {
           Math.abs(x - o.x) < o.w / 2 + 0.12 &&
           Math.abs(z - o.z) < o.d / 2 + 0.12,
       )
+    )
+      return false;
+    if (
+      trees.some(
+        (tree) =>
+          tree.state === "standing" &&
+          Math.hypot(x - tree.position.x, z - tree.position.z) <
+            0.3 * tree.originalScale,
+      ) ||
+      (workerTree.state === "standing" &&
+        Math.hypot(x - workerTree.position.x, z - workerTree.position.z) < 0.3)
     )
       return false;
     // Timber fence openings and the wide front entrance are real passageways.
@@ -1158,8 +2132,8 @@ export function createWorld(): World {
     ),
     snowDots = new THREE.InstancedMesh(sphere, material("#f9fcfd"), 90);
   for (let i = 0; i < 100; i++) {
-    let x = -6.7 + random() * 16,
-      z = -13 + random() * 28;
+    let x = -6.7 + random() * 33,
+      z = -22 + random() * 46;
     if (x > -5.7 && x < 8 && z > -3.6 && z < 9) {
       x = 8.3 + random() * 3;
       z -= 6;
@@ -1229,6 +2203,16 @@ export function createWorld(): World {
             : [m.material])
             materials.add(mat);
       });
+    for (const m of [
+      generated.tunaSkin,
+      generated.steakFace,
+      generated.wood,
+      generated.metal,
+    ]) {
+      materials.delete(m);
+      if (m.map) textures.delete(m.map);
+    }
+    generated.dispose();
     geometries.forEach((g) => g.dispose());
     materials.forEach((m) => m.dispose());
     textures.forEach((t) => t.dispose());
@@ -1250,6 +2234,11 @@ export function createWorld(): World {
     fish,
     customers,
     stations,
+    bounds,
+    workerTree,
+    createPerson: winterPerson,
+    activityProps,
+    ready: generated.ready,
     cutter,
     upgradeGroups,
     smokePuffs,

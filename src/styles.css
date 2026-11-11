@@ -2579,3 +2579,482 @@ button:not(:disabled):hover {
     bottom: calc(280px + env(safe-area-inset-bottom));
   }
 }
+
+/* Activity status lives in the top job board; the play field stays clear. */
+.work-readout {
+  display: none !important;
+}
+.active-work-status {
+  color: #517b51 !important;
+}
+.top-work-progress {
+  position: absolute;
+  z-index: 6;
+  left: 16px;
+  right: 16px;
+  top: calc(169px + env(safe-area-inset-top));
+  height: 4px;
+  overflow: hidden;
+  pointer-events: none;
+  border-radius: 4px;
+  background: #bfad78;
+}
+.top-work-progress > i {
+  display: block;
+  height: 100%;
+  background: #71a65b;
+  transition: width 0.1s linear;
+}
+.stock-badge {
+  position: absolute;
+  z-index: 5;
+  left: 14px;
+  top: calc(181px + env(safe-area-inset-top));
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 45px;
+  padding: 5px 10px;
+  border: 2px solid #365d6d;
+  border-radius: 8px;
+  background: linear-gradient(#79a6b6, #4b7c91);
+  color: #fff2ca;
+  box-shadow:
+    inset 0 2px #b7d3d7,
+    0 4px #294652;
+  font-size: 19px;
+  text-shadow: 0 1px #345c6c;
+}
+.stock-badge small {
+  font-size: 12px;
+}
+.stock-ready:after {
+  content: "";
+  height: 7px;
+  width: 7px;
+  border-radius: 50%;
+  background: #d8ef91;
+  box-shadow: 0 0 0 3px #b9de6a33;
+}
+.workplace-label {
+  display: none;
+}
+.generated-building-art {
+  display: block;
+  width: 72px;
+  height: 72px;
+  background-repeat: no-repeat;
+  border-radius: 5px;
+  box-shadow: 0 3px 5px #58472c26;
+}
+.build-tabs {
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.build-tabs > button {
+  font-size: 15px;
+  gap: 5px;
+  padding: 8px 6px;
+}
+.build-tabs > button > svg {
+  width: 19px;
+}
+.upgrade-stars {
+  gap: 1px;
+}
+.upgrade-stars > span {
+  font-size: 18px;
+}
+.workplaces-content,
+.warehouse-content {
+  padding: 18px;
+}
+.panel-explanation {
+  font-size: 15px;
+  line-height: 1.45;
+  color: #947343;
+  margin-bottom: 16px;
+}
+.workplace-list {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  padding-bottom: 15px;
+}
+.workplace-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+  border: 2px solid #be9a62;
+  border-radius: 8px;
+  padding: 12px;
+  background: linear-gradient(105deg, #fff0c6, #e8c990);
+  box-shadow:
+    inset 0 2px #fff7d5,
+    0 3px #b39159;
+  min-height: 85px;
+}
+.workplace-art {
+  height: 48px;
+  width: 48px;
+  display: grid;
+  place-items: center;
+  background: #e6d09b;
+  border: 1px solid #cfb077;
+  border-radius: 7px;
+  flex-shrink: 0;
+}
+.workplace-card > span:nth-child(2) {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+}
+.workplace-card strong {
+  font:
+    22px "Lilita One",
+    sans-serif;
+  color: #805b35;
+}
+.workplace-card small {
+  font-size: 14px;
+  line-height: 1.35;
+  color: #a0804e;
+}
+.workplace-card > i {
+  display: grid;
+  place-items: center;
+  min-height: 44px;
+  min-width: 38px;
+  color: #718b50;
+  background: #d6d9a0;
+  border-radius: 6px;
+  border: 1px solid #afb576;
+}
+.warehouse-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 21px 0;
+  color: #6b8790;
+  flex-shrink: 0;
+}
+.warehouse-heading > div {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  flex: 1;
+}
+.warehouse-heading strong {
+  font:
+    29px "Lilita One",
+    sans-serif;
+  color: #557988;
+  white-space: nowrap;
+}
+.warehouse-heading strong > small {
+  font-size: 20px;
+  color: #99a797;
+}
+.warehouse-heading span {
+  font-size: 13px;
+  line-height: 1.3;
+  color: #8d996d;
+}
+.warehouse-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 9px;
+}
+.warehouse-item {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 5px 9px;
+  border: 1px solid #d0b27a;
+  border-radius: 7px;
+  background: #f5e5b6;
+  min-height: 121px;
+  text-align: center;
+  opacity: 0.65;
+}
+.warehouse-item.has-stock {
+  background: #fff1c5;
+  border-color: #a9b578;
+  opacity: 1;
+  box-shadow:
+    inset 0 2px #fff8e0,
+    0 2px #c9ad72;
+}
+.warehouse-item > span {
+  font-size: 13px;
+  line-height: 1.2;
+  color: #9b7a47;
+  min-height: 30px;
+}
+.warehouse-item > strong {
+  font:
+    25px "Lilita One",
+    sans-serif;
+  color: #657f48;
+}
+.warehouse-flow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px dashed #b8ad73;
+  padding: 13px;
+  border-radius: 8px;
+  margin-top: 16px;
+  color: #8b965c;
+}
+.warehouse-flow p {
+  font-size: 14px;
+  line-height: 1.4;
+  color: #9b8651;
+}
+.warehouse-footer {
+  display: flex;
+  gap: 10px;
+  padding: 15px;
+  border-top: 2px solid #d4b174;
+  background: #ead2a0;
+  flex-shrink: 0;
+}
+.warehouse-footer > .large-game-button {
+  flex: 1;
+  min-width: 0;
+  min-height: 60px;
+  padding: 8px;
+  gap: 7px;
+  font-size: 15px;
+}
+.warehouse-footer > .large-game-button > span {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.warehouse-footer small {
+  font:
+    800 12px "Nunito",
+    sans-serif;
+  letter-spacing: 0;
+  text-shadow: none;
+  opacity: 0.85;
+}
+.crew-overview {
+  padding: 5px 0 11px;
+}
+.crew-roles {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.crew-role {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #d1b37b;
+  background: #edd8a5;
+  border-radius: 7px;
+  min-height: 65px;
+  opacity: 0.7;
+}
+.crew-role.hired {
+  opacity: 1;
+  background: #f5e9bc;
+  border-color: #acb47e;
+}
+.crew-role > span {
+  height: 37px;
+  width: 37px;
+  display: grid;
+  place-items: center;
+  background: #d6d9a5;
+  border-radius: 6px;
+  color: #879257;
+  flex-shrink: 0;
+}
+.crew-role > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+.crew-role strong {
+  font-size: 16px;
+  color: #8d713f;
+}
+.crew-role small {
+  font-size: 13px;
+  color: #9b945c;
+}
+.crew-build {
+  height: 44px;
+  width: 44px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #a8ab72;
+  background: #c7d48e;
+  border-radius: 5px;
+  color: #6d8143;
+}
+.worker-live-dot {
+  height: 8px;
+  width: 8px;
+  border-radius: 50%;
+  background: #83a95a;
+  box-shadow: 0 0 0 4px #a8bf7233;
+  flex-shrink: 0;
+}
+.crew-storage-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 13px 10px;
+  background: #dce0ac;
+  border: 1px solid #b4b87a;
+  border-radius: 6px;
+  color: #7b8a4b;
+  margin-top: 13px;
+  font-size: 14px;
+  min-height: 49px;
+  text-align: left;
+}
+.crew-storage-link > span {
+  flex: 1;
+}
+.open-stock {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 0;
+  min-height: 44px;
+  font-size: 14px;
+  color: #617e51;
+  background: transparent;
+  text-align: left;
+}
+.game-notice {
+  top: calc(235px + env(safe-area-inset-top));
+  font-size: 14px;
+  max-width: calc(100% - 36px);
+}
+@media (min-width: 900px) {
+  .top-work-progress {
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    width: min(430px, 36vw);
+    top: calc(116px + env(safe-area-inset-top));
+  }
+  .stock-badge {
+    top: calc(150px + env(safe-area-inset-top));
+    left: 22px;
+  }
+  .generated-building-art {
+    width: 75px;
+    height: 75px;
+  }
+}
+@media (max-width: 899px) {
+  .workplace-button {
+    flex-direction: column;
+    gap: 0;
+    padding: 2px;
+  }
+  .workplace-button > svg {
+    height: 24px;
+    width: 24px;
+  }
+  .workplace-button .workplace-label {
+    display: block;
+    font:
+      14px/14px "Lilita One",
+      sans-serif;
+    letter-spacing: 0.5px;
+  }
+  .build-tabs > button > svg {
+    display: none;
+  }
+  .build-tabs > button {
+    font-size: 15px;
+  }
+  .objective-copy p {
+    font-size: 14px;
+  }
+  .generated-building-art {
+    height: 68px;
+    width: 68px;
+  }
+}
+@media (max-width: 400px) {
+  .workplaces-content,
+  .warehouse-content {
+    padding: 16px 14px;
+  }
+  .workplace-card {
+    gap: 10px;
+    padding: 11px;
+    min-height: 85px;
+  }
+  .workplace-card strong {
+    font-size: 21px;
+  }
+  .workplace-card small {
+    font-size: 14px;
+  }
+  .warehouse-grid {
+    gap: 7px;
+  }
+  .warehouse-item {
+    padding: 10px 4px 8px;
+    min-height: 117px;
+  }
+  .warehouse-item > span {
+    font-size: 12px;
+  }
+  .warehouse-footer {
+    gap: 8px;
+    padding: 13px 11px;
+  }
+  .warehouse-footer > .large-game-button {
+    font-size: 14px;
+    gap: 5px;
+  }
+  .warehouse-footer > .large-game-button > svg {
+    width: 20px;
+  }
+  .warehouse-footer small {
+    font-size: 11px;
+  }
+  .build-tabs > button {
+    font-size: 14px;
+    padding: 8px 4px;
+  }
+  .stock-badge {
+    left: 12px;
+    top: calc(180px + env(safe-area-inset-top));
+    font-size: 18px;
+  }
+  .stock-badge small {
+    font-size: 11px;
+  }
+}
+@media (max-height: 700px) and (max-width: 899px) {
+  .top-work-progress {
+    top: calc(150px + env(safe-area-inset-top));
+  }
+  .stock-badge {
+    top: calc(163px + env(safe-area-inset-top));
+  }
+  .game-notice {
+    top: calc(214px + env(safe-area-inset-top));
+  }
+}
