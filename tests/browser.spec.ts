@@ -37,6 +37,7 @@ type Frame = {
   y: number;
   z: number;
   time: number;
+  npcTime: number;
   pack: number;
   cash: number;
   inventory: Record<string, number>;
@@ -99,6 +100,7 @@ async function watchMotion(page: Page) {
           y: Number(data.actionY),
           z: Number(data.actionZ),
           time: performance.now(),
+          npcTime: Number(data.npcTime),
           pack: parseInt(
             document.querySelector(".pack-count")?.textContent || "",
             10,
@@ -207,20 +209,31 @@ function customerQueueAdvances(samples: Frame[]) {
   );
 }
 function assertContinuousCustomers(samples: Frame[]) {
-  const previous = new Map<string, ActorSample>();
+  const previous = new Map<string, { actor: ActorSample; time: number }>();
   let transitions = 0;
   for (const frame of samples)
     for (const customer of frame.customers) {
       const id = String(customer.id),
         before = previous.get(id);
-      if (before && before.visible !== false && customer.visible !== false) {
+      if (
+        before &&
+        before.actor.visible !== false &&
+        customer.visible !== false
+      ) {
+        const elapsed = frame.npcTime - before.time;
+        expect(Number.isFinite(elapsed), "sampled NPC simulation clock").toBe(
+          true,
+        );
+        expect(elapsed, "NPC clock moves forward").toBeGreaterThanOrEqual(0);
+        // Positions and the NPC clock come from the same scene snapshot. A
+        // customer can walk farther between slow frames without teleporting.
         expect(
-          Math.hypot(customer.x - before.x, customer.z - before.z),
+          Math.hypot(customer.x - before.actor.x, customer.z - before.actor.z),
           `continuous customer ${id}`,
-        ).toBeLessThan(1.2);
+        ).toBeLessThanOrEqual(3.2 * elapsed + 0.025);
         transitions++;
       }
-      previous.set(id, customer);
+      previous.set(id, { actor: customer, time: frame.npcTime });
     }
   expect(transitions, "sampled customer movement").toBeGreaterThan(10);
 }
@@ -752,6 +765,36 @@ test("importing a harbor during an active worker job replaces the actors and res
   page,
 }) => {
   test.setTimeout(120_000);
+  // Emulate a slow phone/render host. NPC delivery time must follow elapsed
+  // time at two frames per second, while retaining physical walking and work.
+  await page.addInitScript({
+    content: `(() => {
+    const request = window.requestAnimationFrame.bind(window);
+    const cancel = window.cancelAnimationFrame.bind(window);
+    const pending = new Map();
+    let sequence = 0;
+    window.requestAnimationFrame = callback => {
+      const id = ++sequence;
+      const task = { timer: 0, frame: 0 };
+      task.timer = setTimeout(() => {
+        task.frame = request(time => {
+          pending.delete(id);
+          callback(time);
+        });
+      }, 500);
+      pending.set(id, task);
+      return id;
+    };
+    window.cancelAnimationFrame = id => {
+      const task = pending.get(id);
+      if (!task) return;
+      clearTimeout(task.timer);
+      if (task.frame) cancel(task.frame);
+      pending.delete(id);
+    };
+  })();`,
+  });
+  await watchMotion(page);
   await boot(page);
   await expect
     .poll(async () => !!(await readSave(page)).workerJobs.forester, {
@@ -785,14 +828,19 @@ test("importing a harbor during an active worker job replaces the actors and res
   await expect(page.locator(".game-loading")).toHaveCount(0, {
     timeout: 60_000,
   });
+  const resumedAt = await page.evaluate(() => performance.now());
   await expect.poll(async () => (await readSave(page)).coins).toBe(777);
   const restored = await readSave(page);
   expect(restored.inventory.crab).toBe(2);
   expect(restored.stock.tackle).toBe(3);
   expect(restored.upgrades.crew).toBe(2);
+  expect(restored.workerJobs.forester).toMatchObject({ outputs: { wood: 4 } });
   await expect
     .poll(async () => (await readSave(page)).stock.wood, { timeout: 60_000 })
     .toBeGreaterThanOrEqual(4);
+  // Four is the imported reservation; a fresh job would produce six. Check
+  // that this exact load was delivered once instead of discarding the import.
+  expect((await readSave(page)).stock.wood).toBe(4);
   await expect
     .poll(async () =>
       JSON.parse(
@@ -803,6 +851,22 @@ test("importing a harbor during an active worker job replaces the actors and res
       ),
     )
     .toBe(true);
+  const samples = await motionSince(page, resumedAt);
+  const importedWorker = actorSamples(samples, "workers", "forester");
+  expect(
+    actorTravel(importedWorker),
+    "imported goods physically travel to storage",
+  ).toBeGreaterThan(4);
+  expect(
+    importedWorker.some((worker) => !!worker.carrying),
+    "worker carries reserved timber",
+  ).toBe(true);
+  await page.waitForTimeout(2200);
+  expect(
+    (await readSave(page)).stock.wood,
+    "the imported reservation is not delivered twice",
+  ).toBe(4);
+  assertContinuousCustomers(samples);
   expect(
     (await readSave(page)).coins,
     "delivery creates goods, not phantom wages",

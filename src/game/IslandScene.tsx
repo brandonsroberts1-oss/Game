@@ -1798,7 +1798,8 @@ export default function IslandScene(props: SceneProps) {
     function animate() {
       if (disposed) return;
       frame = requestAnimationFrame(animate);
-      const dt = Math.min(clock.getDelta(), 0.08);
+      const elapsed = clock.getDelta();
+      const dt = Math.min(elapsed, 0.08);
       worldTime += dt;
       reportTimer += dt;
       shadowTimer += dt;
@@ -1996,7 +1997,9 @@ export default function IslandScene(props: SceneProps) {
           }
         }
       }
-      npcs.update(dt, worldTime);
+      // Captain collision uses the short step above. Actors integrate the real
+      // frame interval themselves so slow rendering cannot stall deliveries.
+      npcs.update(elapsed);
       const ambientTime = reducedMotion ? 0 : worldTime;
       world.fish.forEach((fish, i) => {
         const base = fish.userData.basePosition as THREE.Vector3 | undefined;
@@ -2162,6 +2165,7 @@ export default function IslandScene(props: SceneProps) {
           }),
       );
       const population = npcs.diagnostics();
+      canvas.dataset.npcTime = population.time.toFixed(4);
       canvas.dataset.workers = JSON.stringify(population.workers);
       canvas.dataset.customers = JSON.stringify(population.customers);
       canvas.dataset.worldBounds = JSON.stringify(world.bounds);

@@ -70,7 +70,7 @@ npm run test:browser
 npm run test:launch
 ```
 
-The model tests cover processing, capacity, upgrades, payments, migration, quests, daily resets, worker reservations, storage deliveries, and offline production. Browser checks exercise the real animated work cycle, deferred inventory awards, actual rendered-object movement, starter construction, joystick/camera movement, phone layouts, and save backups. Launch checks cover production hosting under `/Game/` and offline execution of the exact standalone artifact without asset requests.
+Economy and actor tests cover processing, capacity, upgrades, payments, migration, quests, daily resets, worker reservations, storage deliveries, and offline production. Reserved worker deliveries are also checked at low frame rates and after a suspended frame. Browser checks exercise the real animated work cycle, deferred inventory awards, actual rendered-object movement, starter construction, joystick/camera movement, phone layouts, and save backups. Launch checks cover production hosting under `/Game/` and offline execution of the exact standalone artifact without asset requests.
 
 The managed cloud browser blocks direct `file://` navigation by administrator policy. That check reports an explicit skip here. A separate offline test supplies only the HTML document to an isolated browser and rejects all other requests. Direct file opening is also tested by GitHub Actions where it is permitted.
 

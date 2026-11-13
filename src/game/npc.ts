@@ -1162,11 +1162,19 @@ export function createHarborNPCs(options: NPCOptions) {
     }
   }
   return {
-    update(dt: number, time: number) {
-      if (disposed) return;
-      worldTime = time;
-      updateWorkers(dt);
-      updateCustomers(dt);
+    update(elapsed: number) {
+      if (disposed || !Number.isFinite(elapsed) || elapsed <= 0) return;
+      // Keep work and walking on elapsed time rather than on the number of
+      // rendered frames. Short simulation steps retain fence/waypoint checks;
+      // bounded catch-up avoids fast-forwarding the harbor after a tab sleeps.
+      let remaining = Math.min(elapsed, 1);
+      while (remaining > 1e-8) {
+        const dt = Math.min(remaining, 0.05);
+        worldTime += dt;
+        updateWorkers(dt);
+        updateCustomers(dt);
+        remaining -= dt;
+      }
     },
     hasCustomer() {
       return !activeSale && !!readyCustomer();
@@ -1184,6 +1192,7 @@ export function createHarborNPCs(options: NPCOptions) {
     },
     diagnostics() {
       return {
+        time: worldTime,
         workers: workers
           .filter((worker) => worker.enabled)
           .map((worker) => ({

@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "npm run build:web && npm run build:download",
     "preview": "vite preview --host 0.0.0.0",
-    "test": "tsx --test src/game/model.test.ts",
+    "test": "tsx --test src/game/model.test.ts src/game/npc.test.ts",
     "test:browser": "playwright test",
     "build:web": "tsc -b && vite build",
     "build:download": "vite build --mode standalone && node scripts/package-game.mjs",
