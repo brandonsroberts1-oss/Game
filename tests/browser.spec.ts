@@ -40,6 +40,7 @@ type Frame = {
   npcTime: number;
   pack: number;
   cash: number;
+  visibleCash: number;
   inventory: Record<string, number>;
   stock: Record<string, number>;
   cutSlices: number;
@@ -51,6 +52,8 @@ type Frame = {
 declare global {
   interface Window {
     __frostQASamples: Frame[];
+    __frostHeldPaidSaveCount?: number;
+    __frostFlushPaidSaves?: () => number;
   }
 }
 
@@ -93,6 +96,12 @@ async function watchMotion(page: Page) {
     const sample = () => {
       const data = document.querySelector("canvas")?.dataset;
       if (data?.phase) {
+        // A HUD render can precede the debounced save. Read economic fields
+        // from one persisted snapshot so a payment never mixes new cash with
+        // old stock; keep the visible counter separate for animation timing.
+        const saved = JSON.parse(
+          localStorage.getItem("frost-and-fin:save:v1") || "{}",
+        );
         window.__frostQASamples.push({
           phase: data.phase,
           rotation: Number(data.actionRotation),
@@ -105,17 +114,14 @@ async function watchMotion(page: Page) {
             document.querySelector(".pack-count")?.textContent || "",
             10,
           ),
-          cash: Number(
+          cash: Number(saved.coins || 0),
+          visibleCash: Number(
             document
               .querySelector(".money-value")
               ?.textContent?.replaceAll(",", "") || "0",
           ),
-          inventory:
-            JSON.parse(localStorage.getItem("frost-and-fin:save:v1") || "{}")
-              .inventory || {},
-          stock:
-            JSON.parse(localStorage.getItem("frost-and-fin:save:v1") || "{}")
-              .stock || {},
+          inventory: saved.inventory || {},
+          stock: saved.stock || {},
           cutSlices: Number(data.cutSlices),
           cutContacts: Number(data.cutContacts),
           cutKnifeX: Number(data.cutKnifeX),
@@ -473,8 +479,10 @@ test("visible tree, fishing, and steak work cycles award cargo only after real m
         "sale-customer",
         "sale-cash",
       ]);
-      for (const frame of sale.filter((frame) => frame.phase === "sale-cash"))
+      for (const frame of sale.filter((frame) => frame.phase === "sale-cash")) {
         expect(frame.cash).toBe(before.coins);
+        expect(frame.visibleCash).toBe(before.coins);
+      }
       await expect
         .poll(async () => customerQueueAdvances(await motionSince(page, 0)), {
           timeout: 15_000,
@@ -1064,19 +1072,95 @@ test("the porter carries warehouse goods to a walking customer and earns money o
   harbor.upgrades.crew = 5;
   harbor.stock.tackle = 4;
   await seedHarbor(page, harbor);
+  // Hold paid saves until a rendered frame records the real HUD/save gap.
+  // This barrier works even when a slow renderer skips a fixed delay entirely.
+  await page.addInitScript({
+    content: `(() => {
+    const set = Storage.prototype.setItem;
+    const pending = [];
+    window.__frostHeldPaidSaveCount = 0;
+    Storage.prototype.setItem = function(key, value) {
+      if (key === ${JSON.stringify(saveKey)} && this.getItem(key) !== null && JSON.parse(value).coins > ${harbor.coins}) {
+        pending.push({ storage: this, key, value });
+        window.__frostHeldPaidSaveCount = pending.length;
+        return;
+      }
+      return set.call(this, key, value);
+    };
+    window.__frostFlushPaidSaves = () => {
+      Storage.prototype.setItem = set;
+      for (const write of pending) set.call(write.storage, write.key, write.value);
+      const count = pending.length;
+      pending.length = 0;
+      window.__frostHeldPaidSaveCount = 0;
+      return count;
+    };
+  })();`,
+  });
   await watchMotion(page);
   await boot(page);
   await expect
-    .poll(async () => (await readSave(page)).coins, { timeout: 90_000 })
-    .toBeGreaterThan(harbor.coins);
+    .poll(
+      () =>
+        page.evaluate(
+          (coins) => ({
+            held: (window.__frostHeldPaidSaveCount || 0) > 0,
+            sampledGap: window.__frostQASamples.some(
+              (frame) =>
+                frame.visibleCash > coins &&
+                frame.cash === coins &&
+                frame.stock.tackle === 4,
+            ),
+          }),
+          harbor.coins,
+        ),
+      { timeout: 90_000 },
+    )
+    .toEqual({ held: true, sampledGap: true });
+  expect((await readSave(page)).coins).toBe(harbor.coins);
+  expect((await readSave(page)).stock.tackle).toBe(4);
+  expect(
+    await page.evaluate(() => window.__frostFlushPaidSaves!()),
+  ).toBeGreaterThan(0);
+  await expect
+    .poll(async () =>
+      (await motionSince(page, 0)).some(
+        (frame) =>
+          frame.cash > harbor.coins && frame.visibleCash > harbor.coins,
+      ),
+    )
+    .toBe(true);
   const samples = await motionSince(page, 0),
-    paidIndex = samples.findIndex((frame) => frame.cash > harbor.coins);
+    paidIndex = samples.findIndex((frame) => frame.cash > harbor.coins),
+    visiblePaidIndex = samples.findIndex(
+      (frame) => frame.visibleCash > harbor.coins,
+    );
   expect(
     paidIndex,
     "payment appears in the recorded scene frames",
   ).toBeGreaterThan(0);
+  expect(
+    visiblePaidIndex,
+    "HUD payment appears in the recorded scene frames",
+  ).toBeGreaterThan(0);
   const beforePayment = samples.slice(0, paidIndex),
-    payment = samples[paidIndex];
+    payment = samples[paidIndex],
+    beforeVisiblePayment = samples.slice(0, visiblePaidIndex);
+  expect(
+    beforeVisiblePayment.some((frame) =>
+      frame.customers.some((customer) => customer.state === "paying"),
+    ),
+    "customer presents payment before the visible cash award",
+  ).toBe(true);
+  expect(
+    samples.some(
+      (frame) =>
+        frame.visibleCash > harbor.coins &&
+        frame.cash === harbor.coins &&
+        frame.stock.tackle === 4,
+    ),
+    "recorded HUD/save delay keeps persisted cash and stock consistent",
+  ).toBe(true);
   expect(
     beforePayment.every((frame) => frame.stock.tackle === 4),
     "warehouse goods stay reserved until customer pays",
@@ -1102,6 +1186,7 @@ test("the porter carries warehouse goods to a walking customer and earns money o
   expect(payment.cash).toBe(
     harbor.coins + resourceSaleValue(harbor, "tackle", 3),
   );
+  expect(samples[visiblePaidIndex].visibleCash).toBe(payment.cash);
   expect(
     samples.some((frame) =>
       frame.customers.some(
@@ -1142,8 +1227,10 @@ test("a returning captain collects crew earnings at the market with an empty pac
     "sale-customer",
     "sale-cash",
   ]);
-  for (const frame of cycle.filter((frame) => frame.phase === "sale-cash"))
+  for (const frame of cycle.filter((frame) => frame.phase === "sale-cash")) {
     expect(frame.cash).toBe(120);
+    expect(frame.visibleCash).toBe(120);
+  }
   // Migrated wages are paid once; V3 workers deliver goods rather than wages.
   expect((await readSave(page)).workersStored).toBe(0);
   expect(
